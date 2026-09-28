@@ -1,0 +1,22 @@
+[package]
+name = "emerald"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+asciidork-parser = "0.36"
+asciidork-ast = "0.36"
+asciidork-core = "0.36"
+gpui = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+gpui = { version = "0.2", features = ["test-support"] }
+tempfile = "3.10"
+
+[[bin]]
+name = "emerald"
+path = "src/main.rs"
+test = true

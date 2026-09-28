@@ -1,0 +1,60 @@
+= Emerald
+:toc:
+
+Emerald is an early-stage desktop AsciiDoc editor written in Rust 2021 with GPUI.
+It combines text editing, an AsciiDoc preview powered by Asciidork, and workspace file management.
+
+== Getting started
+
+Install a Rust toolchain with Cargo and the native build dependencies required by GPUI for your platform.
+From the repository root, build and launch the editor:
+
+[source,shell]
+----
+cargo build
+cargo run
+----
+
+Emerald opens the `notes/` directory beneath the current working directory as its workspace.
+It creates the directory and a `welcome.adoc` document when needed.
+Workspace documents are ignored by Git.
+
+== Features
+
+* UTF-8 text editing with cursor movement and selection.
+* Create, open, save, rename, and delete workspace documents.
+* AsciiDoc preview with headings, paragraphs, lists, quotes, admonitions, tables, and source blocks.
+* Slash commands and a document graph view.
+
+The editor is under active development. The preview supports a subset of AsciiDoc, so complex documents may render differently from a full AsciiDoc processor.
+
+== Development
+
+Run the unit tests before submitting changes:
+
+[source,shell]
+----
+cargo test
+----
+
+Check formatting and lint warnings:
+
+[source,shell]
+----
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+----
+
+Tests live beside the implementation in `src/`.
+Cargo build output in `target/` is ignored by Git.
+
+== Project structure
+
+* `src/main.rs` starts the application; `src/app.rs` coordinates the GPUI view.
+* `src/lib.rs`, `src/document.rs`, and `src/session.rs` manage editor and document state.
+* `src/parser.rs`, `src/rendered.rs`, and `src/preview.rs` handle parsing and preview data.
+* `src/workspace.rs` manages workspace files.
+* The remaining `src/` modules provide text storage, input, layout, themes, and UI components.
+* `Cargo.toml` and `Cargo.lock` define the package and dependency versions.
+
+See link:AGENTS.md[AGENTS.md] for contribution guidelines.

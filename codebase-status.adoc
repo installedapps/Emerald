@@ -1,0 +1,142 @@
+= Emerald Codebase Status
+:toc:
+:sectnums:
+
+== Executive assessment
+
+Emerald is a working early MVP of a desktop AsciiDoc editor, not yet a production-ready editor. The application has a credible core: it opens or creates a workspace, edits UTF-8 text, supports cursor movement and selection, saves and switches files, parses AsciiDoc through Asciidork, and renders a useful preview. The code is also in a comparatively good position for continued development because the document model, parser, workspace boundary, and UI helpers are already separated.
+
+The main gap is product depth rather than basic stability. The GPUI shell is featureful for a first pass, but several behaviors are approximations, errors are hidden at UI boundaries, and the preview model intentionally reduces AsciiDoc to a small set of blocks. In practical terms: the codebase is ready for focused feature work and correctness hardening, but it needs a stabilisation pass before being treated as a dependable daily editor.
+
+== Snapshot
+
+* Rust 2021 application named `emerald`, version `0.1.0`.
+* GPUI desktop frontend with a single `Emerald` view.
+* 4,769 lines of Rust across 19 source files.
+* 80 library tests and 2 binary tests; all 82 pass.
+* `cargo build` passes.
+* `cargo fmt --all -- --check` passes.
+* `cargo clippy --all-targets --all-features -- -D warnings` passes.
+* Dependencies are deliberately small: `anyhow`, `asciidork-parser`, `asciidork-ast`, `gpui`, and `tempfile` for tests.
+* The supplied workspace does not contain usable Git metadata, so repository history, branch state, and commit hygiene could not be assessed.
+
+== What is already solid
+
+=== Editing core
+
+`src/document.rs` is the strongest architectural part of the project. `DocumentEditor` owns the rope, cursor, selection, dirty state, parse invalidation, and revisions without depending on GPUI or the filesystem. That makes the most important editing behavior directly testable. The implementation covers insertion, replacement of selections, backspace, forward delete, horizontal and vertical movement, line edges, list continuation, mouse selection, and UTF-8 boundaries.
+
+`src/lib.rs` provides a useful application-facing facade through `EditorState`. The facade coordinates documents and files while delegating text behavior to `DocumentEditor`; this is a good boundary to preserve as the application grows.
+
+=== Text storage
+
+`src/rope.rs` and `src/sum_tree.rs` are real supporting infrastructure rather than placeholder types. The rope maintains chunked text plus summaries for byte length, UTF-16 length, line breaks, and line widths. The sum tree supports summary-based seeking and append/split operations. Tests cover Unicode, replacement, chunking, tree seeking, summary updates, and bounded tree height.
+
+The caveat is that `Rope` still keeps a complete `String` alongside the tree (`src/rope.rs:10-16`). Edits update both representations. This is reasonable for an MVP, but it means the implementation is not yet delivering the memory characteristics normally expected from a rope.
+
+=== Workspace safety and persistence
+
+`src/workspace.rs` has a clear filesystem boundary. It canonicalizes the root, restricts resolved files to that root, excludes symlinks during startup listing, creates files atomically with `create_new`, validates names, prevents deletion of the final file, and tests path traversal and symlink cases.
+
+`EditorState` also preserves dirty edits when switching files and updates the active file list after create, rename, and delete operations. These are important user-data protections for this stage of the project.
+
+=== Parsing and preview foundations
+
+`src/parser.rs` uses Asciidork's AST rather than treating all source as ad-hoc lines. It extracts titles, sections, paragraphs, lists, quotes, admonitions, tables, source blocks, and diagram blocks. `src/rendered.rs` then maps the parser model to render blocks and adds a generated table of contents.
+
+The render cache is keyed by path and content hash (`src/rendered.rs:102-149`), and loaded-file snapshots are prepared in a background task in `src/workspace_actions.rs`. This gives the UI a reasonable foundation for incremental improvements.
+
+=== Test posture
+
+The test suite is unusually good for an early desktop prototype. It is concentrated around pure or mostly pure boundaries and includes meaningful behavior names. The most valuable coverage is in editor commands, workspace safety, UTF-8 cursor behavior, parsing, rendering snapshots, layout calculations, and cache invalidation.
+
+There are no integration tests that exercise an actual GPUI window, and no end-to-end tests for asynchronous file switching, prompt handling, or visible rendering. That is the principal testing blind spot.
+
+== Main risks and limitations
+
+=== Preview fidelity is intentionally narrow
+
+The parser model in `src/parser.rs` is a lossy projection of the AsciiDoc AST. Nested blocks, many inline node types, document attributes, parts, and some table/cell content are discarded or flattened. `cell_text` only retains paragraph and heading text for nested AsciiDoc cells (`src/parser.rs:207-223`).
+
+This is acceptable for a first preview, but it means the rendered document can silently differ from the source. The next rendering phase should consume richer AST information and preserve semantic structure instead of expanding more special cases in `ParsedBlock`.
+
+=== Hit testing uses a fixed-width approximation
+
+`document_column_for_pointer` maps the mouse position using the constant `SOURCE_CHAR_WIDTH` (`src/ui.rs:159-167`). The rendered source uses GPUI text layout, so proportional fonts, emoji, combining characters, and mixed-width Unicode will not map accurately even though the resulting byte offset is kept on a valid UTF-8 boundary. The existing tests validate boundary safety, not visual accuracy.
+
+The document line height is also supplied as a literal at the UI call site while source rendering uses `SOURCE_LINE_HEIGHT`. These values can drift and make selection feel offset after a visual change.
+
+=== UI errors are swallowed
+
+Several event handlers intentionally discard results with `let _ =`, including save, create, open, delete, and asynchronous view updates (`src/workspace_actions.rs:85`, `104-110`, `132-145`, `161-179`). A failed save can therefore leave the user with no visible explanation, and a failed create/delete can look like a no-op.
+
+The model returns `Result`, which is good. The missing piece is a single UI error state and a consistent path that displays or logs failures.
+
+=== Startup is tightly coupled to the process directory
+
+`Emerald::new` always chooses `current_dir()/notes` (`src/app.rs:98-103`). There is no command-line workspace argument, recent-workspace state, native folder picker, or configuration layer. This is appropriate for a development prototype but will become a usability and deployment constraint quickly.
+
+=== Concurrency is only partially modelled
+
+File switching uses a revision counter to ignore stale async results, which is a good start (`src/workspace_actions.rs:35-73`). However, the background task can save the current file before resolving the requested file, and UI failures are reduced to a string without a broader operation state. There is also no external-file change detection, conflict handling, autosave, or crash recovery.
+
+=== The application shell is still a large stateful surface
+
+`src/app.rs` owns the `Emerald` state and several behavior modules extend it through `impl super::Emerald` blocks (`context.rs`, `editor.rs`, `input.rs`, `sidebar.rs`, `source.rs`, and `workspace_actions.rs`). This is a useful short-term split for rendering, but the view still owns file loading, preview scheduling, cursor blinking, rename mode, menus, source/review mode, scroll state, and error state. As features accumulate, this will become the main maintainability pressure point.
+
+=== The rope's complexity is ahead of current demand
+
+The custom `SumTree` and rope are well tested, but much of the rope's current query path still walks all chunks for line lookup, while the full source `String` remains authoritative for edits and display. Before optimising this further, establish realistic document-size benchmarks and decide whether the tree should become the actual text backing store or remain an indexing structure.
+
+== Architecture opportunities
+
+These are the highest-value deepening opportunities identified by the scan.
+
+=== 1. Deepen the document/render snapshot boundary
+
+*Cluster:* `document.rs`, `parser.rs`, `rendered.rs`, `lib.rs`.
+*Why coupled:* text revisions, parse revisions, dirty flags, preview refresh, and render-cache invalidation all describe one document lifecycle but are currently coordinated across multiple types and the GPUI view.
+*Dependency category:* shared state and transformation pipeline.
+*Test impact:* move toward boundary tests that submit a source revision and receive one coherent document snapshot containing source, diagnostics, and render blocks; reduce tests that separately assert incidental invalidation flags.
+
+=== 2. Deepen workspace operations into an application service
+
+*Cluster:* `workspace.rs`, `lib.rs`, `workspace_actions.rs`.
+*Why coupled:* file switching, dirty-save policy, async loading, active-file changes, and user-visible errors are spread between the pure filesystem boundary, editor facade, and GPUI event handlers.
+*Dependency category:* cross-boundary I/O and orchestration.
+*Test impact:* add service-level tests for switch/create/rename/delete outcomes, including failure states and stale async results, leaving GPUI handlers as thin adapters.
+
+=== 3. Replace presentation flags with an explicit view model
+
+*Cluster:* `app.rs`, `ui.rs`, `editor.rs`, `source.rs`, `sidebar.rs`.
+*Why coupled:* many booleans and revisions jointly determine whether source, preview, loading, rename, selection, and error UI are shown.
+*Dependency category:* UI state and derived presentation.
+*Test impact:* pure state-transition tests could cover mode changes and operation status; GPUI tests would only verify wiring and rendering.
+
+== Recommended order of work
+
+. Surface all ignored I/O errors in the UI and add tests for failure paths.
+. Consolidate line-height and hit-testing constants, then replace fixed-width hit testing with actual text-layout measurement.
+. Define a richer render model from the Asciidork AST, with explicit behavior for unsupported constructs rather than silent flattening.
+. Extract a document snapshot or render pipeline boundary so source edits, diagnostics, and preview cache cannot drift.
+. Add an explicit workspace selection/configuration path and external-file conflict handling.
+. Benchmark large documents before changing the rope internals; only then decide whether to remove the duplicate `String`.
+. Add a small GPUI smoke-test strategy or manual capture checklist for asynchronous switching, errors, selection, scrolling, and rendering.
+
+== Bottom line
+
+Emerald is beyond a toy: the editing and workspace core is coherent, tested, and safe enough to support continued implementation. It is not yet a finished editor because the preview is deliberately partial, the UI still hides operational failures, and several interaction behaviors are geometric approximations. The best next investment is correctness and boundary hardening around the existing core, followed by richer AsciiDoc rendering; broad new features should wait until those seams are explicit.
+
+== Evidence and validation
+
+Assessment based on the source tree, `Cargo.toml`, existing architecture/roadmap notes, and the following commands run on 2026-09-02:
+
+[source,shell]
+----
+cargo test
+cargo build
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+----
+
+All commands completed successfully. Cargo additionally reports that `proc-macro-error2 v2.0.1` contains code that will be rejected by a future Rust version; this is a dependency/toolchain compatibility warning, not a current build failure.
