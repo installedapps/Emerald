@@ -32,7 +32,7 @@ impl super::Emerald {
                 entity.update(cx, |view, cx| {
                     range
                         .map(|index| {
-                            view.render_sidebar_file(view.state.files()[index].clone(), cx)
+                            view.render_sidebar_file(view.state.files()[index].clone(), index, cx)
                                 .into_any_element()
                         })
                         .collect()
@@ -98,16 +98,19 @@ impl super::Emerald {
     pub(super) fn render_sidebar_file(
         &self,
         file: PathBuf,
+        index: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = EVERFOREST_DARK;
         let is_active = file == self.state.active_file();
-        let style = sidebar_file_style(theme, is_active);
+        let style = sidebar_file_style(theme, is_active, false);
+        let hover_style = sidebar_file_style(theme, is_active, true);
         let file_path = file.clone();
         let context_file = file.clone();
 
         div()
-            .h(px(40.0))
+            .id(("sidebar-file", index))
+            .h(px(30.0))
             .w_full()
             .overflow_hidden()
             .p_2()
@@ -116,6 +119,7 @@ impl super::Emerald {
             .bg(rgb(style.background))
             .text_color(rgb(style.text))
             .cursor_pointer()
+            .rounded_sm()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event, window, cx| {
@@ -128,6 +132,11 @@ impl super::Emerald {
                     this.show_sidebar_context_menu(context_file.clone(), event, window, cx);
                 }),
             )
+            .hover(|file| {
+                file.bg(rgb(hover_style.background))
+                    .border_color(rgb(hover_style.border))
+                    .text_color(rgb(hover_style.text))
+            })
             .child(
                 file.file_name()
                     .unwrap_or_default()

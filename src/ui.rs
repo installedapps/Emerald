@@ -345,8 +345,8 @@ impl NoteSwitchIntent {
     }
 }
 
-pub fn sidebar_file_style(theme: EmeraldTheme, active: bool) -> SidebarFileStyle {
-    if active {
+pub fn sidebar_file_style(theme: EmeraldTheme, active: bool, hovered: bool) -> SidebarFileStyle {
+    if active || hovered {
         SidebarFileStyle {
             background: theme.active_file,
             text: theme.active_file_text,
@@ -461,12 +461,41 @@ mod tests {
 
     #[test]
     fn active_sidebar_file_uses_clear_complementary_highlight() {
-        let active = sidebar_file_style(EVERFOREST_DARK, true);
-        let inactive = sidebar_file_style(EVERFOREST_DARK, false);
+        let active = sidebar_file_style(EVERFOREST_DARK, true, false);
+        let inactive = sidebar_file_style(EVERFOREST_DARK, false, false);
 
         assert_ne!(active.background, inactive.background);
         assert_eq!(active.background, EVERFOREST_DARK.active_file);
         assert_eq!(active.border, EVERFOREST_DARK.accent);
+    }
+
+    #[test]
+    fn hovering_inactive_sidebar_file_uses_highlight_colors() {
+        let hovered = sidebar_file_style(EVERFOREST_DARK, false, true);
+        let active = sidebar_file_style(EVERFOREST_DARK, true, false);
+
+        assert_eq!(hovered, active);
+        assert_eq!(hovered.text, EVERFOREST_DARK.active_file_text);
+    }
+
+    #[test]
+    fn inactive_sidebar_file_returns_to_normal_colors_after_hover() {
+        let before = sidebar_file_style(EVERFOREST_DARK, false, false);
+        let during = sidebar_file_style(EVERFOREST_DARK, false, true);
+        let after = sidebar_file_style(EVERFOREST_DARK, false, false);
+
+        assert_ne!(during, before);
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn active_sidebar_file_stays_highlighted_after_hover_ends() {
+        let active = sidebar_file_style(EVERFOREST_DARK, true, false);
+        let active_hovered = sidebar_file_style(EVERFOREST_DARK, true, true);
+        let inactive = sidebar_file_style(EVERFOREST_DARK, false, false);
+
+        assert_eq!(active_hovered, active);
+        assert_ne!(inactive, active);
     }
 
     #[test]
