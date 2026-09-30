@@ -1,8 +1,11 @@
 = Emerald
 :toc:
 
-Emerald is an early-stage desktop AsciiDoc editor written in Rust 2021 with GPUI.
+Emerald is an early-stage desktop AsciiDoc editor written in Rust  with GPUI.
 It combines text editing, an AsciiDoc preview powered by Asciidork, and workspace file management.
+
+
+
 
 == Getting started
 

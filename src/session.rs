@@ -21,6 +21,23 @@ pub struct WorkspaceSession {
 }
 
 impl WorkspaceSession {
+    /// Create a lightweight state for the UI while the workspace is loaded in
+    /// the background. The full file list and active document are populated by
+    /// `open_or_create` once that work completes.
+    pub fn loading_placeholder(workspace_root: impl AsRef<Path>) -> Result<Self> {
+        let workspace = Workspace::open(workspace_root.as_ref())?;
+        let active_file = workspace.root().join("welcome.adoc");
+        let document = DocumentEditor::from_text("");
+
+        Ok(Self {
+            workspace,
+            active_file,
+            files: Vec::new(),
+            document,
+            graph_cache: None,
+        })
+    }
+
     #[tracing::instrument(level = "info", skip(workspace_root), fields(root = %workspace_root.as_ref().display()), err)]
     pub fn open_or_create(workspace_root: impl AsRef<Path>) -> Result<Self> {
         let workspace = Workspace::open(workspace_root.as_ref())?;

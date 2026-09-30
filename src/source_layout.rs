@@ -30,12 +30,13 @@ impl SourceLayoutCache {
         text: &str,
         start: usize,
         width: f32,
+        text_color: u32,
         window: &mut Window,
     ) -> Rc<Vec<SourceRowLayout>> {
         if let Some((_, _, rows)) = self.lines.iter().find(|(key, _, _)| *key == index) {
             return rows.clone();
         }
-        let rows = Rc::new(prepare(text, start, width, window));
+        let rows = Rc::new(prepare(text, start, width, text_color, window));
         if text.len() <= MAX_TEXT_BYTES {
             while self.lines.len() >= MAX_LINES || self.text_bytes + text.len() > MAX_TEXT_BYTES {
                 let (_, bytes, _) = self.lines.pop_front().unwrap();
@@ -48,12 +49,18 @@ impl SourceLayoutCache {
     }
 }
 
-fn prepare(text: &str, start: usize, width: f32, window: &mut Window) -> Vec<SourceRowLayout> {
+fn prepare(
+    text: &str,
+    start: usize,
+    width: f32,
+    color: u32,
+    window: &mut Window,
+) -> Vec<SourceRowLayout> {
     let rows = emerald::ui::wrapped_source_line(text, start, usize::MAX, None, |text| {
         let shaped = window.text_system().shape_text(
             text.to_owned().into(),
             px(18.0),
-            &[text_run(text.len())],
+            &[text_run(text.len(), color)],
             Some(px(width)),
             None,
         );
@@ -80,7 +87,7 @@ fn prepare(text: &str, start: usize, width: f32, window: &mut Window) -> Vec<Sou
             let shaped = window.text_system().shape_line(
                 content.to_owned().into(),
                 px(18.0),
-                &[text_run(content.len())],
+                &[text_run(content.len(), color)],
                 None,
             );
             let stops = character_stops(content, &shaped);
@@ -95,11 +102,11 @@ fn prepare(text: &str, start: usize, width: f32, window: &mut Window) -> Vec<Sou
         .collect()
 }
 
-fn text_run(len: usize) -> TextRun {
+fn text_run(len: usize, color: u32) -> TextRun {
     TextRun {
         len,
         font: gpui::font(SOURCE_FONT_FAMILY),
-        color: rgb(EVERFOREST_DARK.text).into(),
+        color: rgb(color).into(),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -123,54 +130,5 @@ fn character_stops(text: &str, shaped: &ShapedLine) -> Vec<(usize, f32)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[gpui::test]
-    fn stops_match_gpui_for_unicode_ligatures_and_empty_text(cx: &mut gpui::TestAppContext) {
-        let cx = cx.add_empty_window();
-        cx.update(|window, _| {
-            for text in [
-                "",
-                "abc",
-                "界é🙂",
-                "office ffi",
-                "e\u{301}\u{200d}🙂",
-                "مرحبا abc",
-            ] {
-                let shaped = window.text_system().shape_line(
-                    text.to_owned().into(),
-                    px(18.0),
-                    &[text_run(text.len())],
-                    None,
-                );
-                for (index, x) in character_stops(text, &shaped) {
-                    assert_eq!(x, f32::from(shaped.x_for_index(index)));
-                }
-            }
-        });
-    }
-
-    #[gpui::test]
-    fn cache_reuses_measurements_and_bounds_retained_text(cx: &mut gpui::TestAppContext) {
-        let cx = cx.add_empty_window();
-        cx.update(|window, _| {
-            let mut cache = SourceLayoutCache::default();
-            let first = cache.get_or_prepare(0, "界 source\n", 0, 200., window);
-            assert!(Rc::ptr_eq(
-                &first,
-                &cache.get_or_prepare(0, "界 source\n", 0, 200., window)
-            ));
-            let text = "a".repeat(1024);
-            for index in 1..200 {
-                cache.get_or_prepare(index, &text, index * text.len(), 200., window);
-                assert!(cache.lines.len() <= MAX_LINES);
-                assert!(cache.text_bytes <= MAX_TEXT_BYTES);
-            }
-            assert!(!Rc::ptr_eq(
-                &first,
-                &cache.get_or_prepare(0, "界 source\n", 0, 200., window)
-            ));
-        });
-    }
-}
+#[path = "tests/source_layout.rs"]
+mod tests;

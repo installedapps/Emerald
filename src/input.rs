@@ -24,36 +24,8 @@ fn edit_rename_buffer(buffer: &mut String, keystroke: &Keystroke) {
 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn select_all_recognizes_control_and_platform_shortcuts_only() {
-        for key in ["ctrl-a", "cmd-a"] {
-            assert!(is_select_all(&Keystroke::parse(key).unwrap()));
-        }
-        for key in ["a", "alt-a", "ctrl-alt-a", "ctrl-b"] {
-            assert!(!is_select_all(&Keystroke::parse(key).unwrap()));
-        }
-    }
-
-    #[test]
-    fn renaming_uses_typed_capitals_spaces_and_unicode() {
-        let mut name = String::new();
-        for (key, text) in [("shift-p", "P"), ("space", " "), ("e", "é")] {
-            let mut keystroke = Keystroke::parse(key).unwrap();
-            keystroke.key_char = Some(text.into());
-            edit_rename_buffer(&mut name, &keystroke);
-        }
-        assert_eq!(name, "P é");
-        edit_rename_buffer(&mut name, &Keystroke::parse("backspace").unwrap());
-        assert_eq!(name, "P ");
-        let mut shortcut = Keystroke::parse("ctrl-a").unwrap();
-        shortcut.key_char = Some("a".into());
-        edit_rename_buffer(&mut name, &shortcut);
-        assert_eq!(name, "P ");
-    }
-}
+#[path = "tests/input.rs"]
+mod tests;
 
 impl super::Emerald {
     pub(crate) fn handle_keystroke(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
@@ -144,26 +116,6 @@ impl super::Emerald {
         self.blink_cursor.show();
         self.schedule_parse_refresh(cx);
         self.reveal_source(cx);
-        cx.notify();
-    }
-
-    pub(super) fn scroll_document_to_bottom(
-        &mut self,
-        _: &MouseDownEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.interaction.source_revealed || self.state.selection().is_some() {
-            self.source_list_state.scroll_to(ListOffset {
-                item_ix: self.source_list_state.item_count(),
-                offset_in_item: px(0.0),
-            });
-        } else {
-            self.document_list_state.scroll_to(ListOffset {
-                item_ix: self.document_list_count,
-                offset_in_item: px(0.0),
-            });
-        }
         cx.notify();
     }
 

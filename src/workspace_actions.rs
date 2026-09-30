@@ -31,7 +31,7 @@ impl super::Emerald {
 
     pub(super) fn toggle_graph_settings(
         &mut self,
-        _: &MouseDownEvent,
+        _: &gpui::ClickEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -97,7 +97,7 @@ impl super::Emerald {
 
     pub(super) fn toggle_graph(
         &mut self,
-        _: &MouseDownEvent,
+        _: &gpui::ClickEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -209,10 +209,13 @@ impl super::Emerald {
 
     pub(super) fn create_new_file(
         &mut self,
-        _: &MouseDownEvent,
+        _: &gpui::ClickEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.file_loading() {
+            return;
+        }
         if let Err(error) = self.state.create_file("untitled") {
             self.show_operation_error(error, cx);
             window.focus(&self.focus_handle, cx);
@@ -236,10 +239,13 @@ impl super::Emerald {
 
     pub(super) fn save_current_file(
         &mut self,
-        _: &MouseDownEvent,
+        _: &gpui::ClickEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.file_loading() {
+            return;
+        }
         if let Err(error) = self.state.save() {
             self.show_operation_error(error, cx);
             window.focus(&self.focus_handle, cx);
@@ -254,10 +260,13 @@ impl super::Emerald {
 
     pub(super) fn open_file(
         &mut self,
-        _: &MouseDownEvent,
+        _: &gpui::ClickEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.file_loading() {
+            return;
+        }
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -297,10 +306,13 @@ impl super::Emerald {
 
     pub(super) fn delete_current_file(
         &mut self,
-        _: &MouseDownEvent,
+        _: &gpui::ClickEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.file_loading() {
+            return;
+        }
         let receiver = window.prompt(
             PromptLevel::Warning,
             "Delete the current file?",
@@ -318,6 +330,9 @@ impl super::Emerald {
                 }
             }
             let result = view.update(cx, |view, cx| {
+                if view.file_loading() {
+                    return;
+                }
                 if let Err(error) = view.state.delete_active_file() {
                     view.show_operation_error(error, cx);
                     return;

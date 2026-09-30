@@ -7,7 +7,7 @@ use std::time::Duration;
 #[allow(unused_imports)]
 use emerald::cursor::BlinkCursor;
 use emerald::rendered::{RenderBlock, RenderCache, RenderStyle};
-use emerald::theme::EVERFOREST_DARK;
+use emerald::theme::{EmeraldTheme, ThemeId, ThemePreferences};
 use emerald::ui::{
     cursor_style, document_scroll_chrome, document_surface_chrome, editor_chrome, shell_layout,
     sidebar_file_style, LayoutMode, NoteSwitchIntent, ShellLayout, DOCUMENT_PADDING_X,
@@ -33,6 +33,7 @@ pub(crate) struct Emerald {
     document_list_blocks: Option<Arc<Vec<RenderBlock>>>,
     document_list_file: Option<PathBuf>,
     pub(crate) blink_cursor: BlinkCursor,
+    theme_preferences: ThemePreferences,
 }
 
 /// Ephemeral view state is isolated from the document/workspace session.
@@ -60,6 +61,13 @@ struct InteractionState {
     graph_drag_start: gpui::Point<f32>,
     graph_hovered: Option<usize>,
     graph_settings: bool,
+    favorites_only: bool,
+    sidebar_visible: bool,
+    sidebar_width: f32,
+    sidebar_resize: Option<(f32, f32)>,
+    links_sidebar_visible: bool,
+    links_sidebar_width: f32,
+    links_sidebar_resize: Option<(f32, f32)>,
 }
 
 #[derive(Clone)]
@@ -72,10 +80,14 @@ enum ContextMenu {
         position: gpui::Point<gpui::Pixels>,
         file: PathBuf,
     },
+    Themes {
+        position: gpui::Point<gpui::Pixels>,
+    },
 }
 
 struct SourceLinesCache {
     wrap_width: f32,
+    theme_text: u32,
     text_revision: u64,
     file: PathBuf,
     text: Arc<str>,
@@ -103,10 +115,18 @@ mod input;
 #[path = "rendered_view.rs"]
 mod rendered_view;
 #[cfg(test)]
-#[path = "scrolling_tests.rs"]
+#[path = "tests/scrolling.rs"]
 mod scrolling_tests;
 #[path = "sidebar.rs"]
 mod sidebar;
+#[path = "sidebar_controls.rs"]
+mod sidebar_controls;
+#[path = "sidebar_frame.rs"]
+mod sidebar_frame;
+#[path = "sidebar_links.rs"]
+mod sidebar_links;
+#[path = "sidebar_resize.rs"]
+mod sidebar_resize;
 #[path = "slash_menu.rs"]
 mod slash_menu;
 #[path = "source.rs"]
@@ -124,11 +144,13 @@ impl Emerald {
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("notes");
         tracing::info!(path = %workspace.display(), "opening workspace");
-        let state = EditorState::open_or_create(&workspace).unwrap_or_else(|error| {
+        let state = EditorState::loading_placeholder(&workspace).unwrap_or_else(|error| {
             tracing::error!(path = %workspace.display(), error = %error, "failed to open workspace");
             panic!("could not open the Emerald workspace at {}: {error}", workspace.display());
         });
-        Self::with_state(state, cx)
+        let mut view = Self::with_state(state, cx);
+        view.start_initial_workspace_load(workspace, cx);
+        view
     }
 
     fn with_state(state: EditorState, cx: &mut Context<Self>) -> Self {
@@ -136,6 +158,7 @@ impl Emerald {
 
         Self {
             state,
+            theme_preferences: ThemePreferences::load(),
             interaction: InteractionState {
                 is_mouse_selecting: false,
                 editing_revision: 0,
@@ -158,6 +181,13 @@ impl Emerald {
                 graph_drag_start: gpui::point(0.0, 0.0),
                 graph_hovered: None,
                 graph_settings: false,
+                favorites_only: false,
+                sidebar_visible: true,
+                sidebar_width: 280.0,
+                sidebar_resize: None,
+                links_sidebar_visible: true,
+                links_sidebar_width: 260.0,
+                links_sidebar_resize: None,
             },
             render_cache: RenderCache::default(),
             focus_handle,
@@ -168,6 +198,87 @@ impl Emerald {
             document_list_file: None,
             blink_cursor: BlinkCursor::default(),
         }
+    }
+
+    pub(crate) fn theme(&self) -> EmeraldTheme {
+        self.theme_preferences.selected.theme()
+    }
+
+    fn start_initial_workspace_load(&mut self, workspace: PathBuf, cx: &mut Context<Self>) {
+        self.interaction.file_switch_revision =
+            self.interaction.file_switch_revision.wrapping_add(1);
+        let revision = self.interaction.file_switch_revision;
+        let started = std::time::Instant::now();
+        self.interaction.file_loading = true;
+
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let state = EditorState::open_or_create(&workspace)?;
+                    let active_file = state.active_file().to_path_buf();
+                    let snapshot = emerald::rendered::RenderSnapshot::from_parsed(
+                        state.text(),
+                        state.parsed_document().clone(),
+                    );
+                    Ok::<_, anyhow::Error>((state, active_file, snapshot))
+                })
+                .await;
+
+            let _ = view.update(cx, |view, cx| {
+                if view.interaction.file_switch_revision != revision {
+                    return;
+                }
+
+                view.interaction.file_loading = false;
+                match result {
+                    Ok((state, active_file, snapshot)) => {
+                        view.state = state;
+                        view.render_cache = RenderCache::default();
+                        view.render_cache
+                            .insert(active_file, view.state.text(), snapshot);
+                        view.source_list_state.reset(0);
+                        view.document_list_state.reset(0);
+                        view.document_list_count = 0;
+                        view.document_list_blocks = None;
+                        view.document_list_file = None;
+                        view.interaction.source_lines_cache = None;
+                        view.interaction.file_load_error = None;
+                        tracing::info!(
+                            elapsed_ms = started.elapsed().as_millis(),
+                            files = view.state.files().len(),
+                            lines = view.state.line_count(),
+                            "workspace loaded"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(error = %error, "failed to open the Emerald workspace");
+                        view.interaction.file_load_error = Some(error.to_string());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn select_theme(&mut self, theme: ThemeId, cx: &mut Context<Self>) {
+        self.theme_preferences.selected = theme;
+        self.theme_preferences.save();
+        self.interaction.context_menu = None;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_theme_favorite(&mut self, theme: ThemeId, cx: &mut Context<Self>) {
+        if self.theme_preferences.favorites.contains(&theme) {
+            self.theme_preferences
+                .favorites
+                .retain(|favorite| *favorite != theme);
+        } else {
+            self.theme_preferences.favorites.push(theme);
+        }
+        self.theme_preferences.save();
+        cx.notify();
     }
 
     fn reveal_source(&mut self, cx: &mut Context<Self>) {
@@ -247,7 +358,7 @@ impl Render for Emerald {
             .flex()
             .size_full()
             .min_w(px(0.0))
-            .bg(rgb(EVERFOREST_DARK.background));
+            .bg(rgb(self.theme().window_background));
         let shell = match layout.mode {
             LayoutMode::Compact => shell.flex_col(),
             LayoutMode::Desktop => shell.flex_row(),
@@ -255,6 +366,12 @@ impl Render for Emerald {
         let shell = shell
             .child(self.render_sidebar(layout, cx))
             .child(self.render_editor(layout, window, cx))
+            .child(self.render_links_sidebar(cx))
+            .on_mouse_move(cx.listener(Self::resize_sidebar))
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(Self::finish_sidebar_resize),
+            )
             .on_mouse_down(MouseButton::Left, cx.listener(Self::dismiss_context_menu));
         if let Some(menu) = self.interaction.context_menu.clone() {
             shell.child(self.render_context_menu(menu, cx))
@@ -265,16 +382,11 @@ impl Render for Emerald {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn idle_preview_waits_for_selection_to_be_cleared() {
-        assert!(!source_can_return_to_preview(
-            false,
-            Some(&emerald::Selection { start: 1, end: 4 })
-        ));
-        assert!(!source_can_return_to_preview(true, None));
-        assert!(source_can_return_to_preview(false, None));
-    }
-}
+#[path = "tests/sidebar_interactions.rs"]
+mod sidebar_interaction_tests;
+#[cfg(test)]
+#[path = "tests/sidebar_unit.rs"]
+mod sidebar_unit_tests;
+#[cfg(test)]
+#[path = "tests/app.rs"]
+mod tests;

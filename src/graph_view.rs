@@ -15,7 +15,7 @@ fn note_name(path: &std::path::Path) -> String {
 
 impl super::Emerald {
     pub(super) fn render_graph(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = EVERFOREST_DARK;
+        let theme = self.theme();
         let graph = self.state.link_graph().clone();
         let active_path = self.state.active_file().to_path_buf();
         let hovered = self.interaction.graph_hovered;
@@ -58,7 +58,11 @@ impl super::Emerald {
                             match line.build() {
                                 Ok(path) => window.paint_path(
                                     path,
-                                    rgb(if edge.highlighted { 0x7296a6 } else { 0x364449 }),
+                                    rgb(if edge.highlighted {
+                                        theme.accent
+                                    } else {
+                                        theme.panel_border
+                                    }),
                                 ),
                                 Err(error) => tracing::warn!(%error, "could not paint graph link"),
                             }
@@ -89,7 +93,11 @@ impl super::Emerald {
                 .cursor_pointer()
                 .opacity(if is_highlighted { 1.0 } else { 0.4 })
                 .text_xs()
-                .text_color(rgb(if is_highlighted { theme.text } else { 0x667277 }))
+                .text_color(rgb(if is_highlighted {
+                    theme.text
+                } else {
+                    theme.faint_text
+                }))
                 .child(
                     div()
                         .w(px(radius * 2.0))
@@ -98,18 +106,18 @@ impl super::Emerald {
                         .rounded_full()
                         .border_1()
                         .border_color(rgb(if is_active {
-                            0xf0c674
+                            theme.accent
                         } else if path.exists() {
-                            0x8fbfda
+                            theme.muted_text
                         } else {
-                            0x9b6a78
+                            theme.destructive
                         }))
                         .bg(rgb(if is_active {
-                            0xf0c674
+                            theme.accent
                         } else if path.exists() {
-                            0x6c9fba
+                            theme.panel
                         } else {
-                            0x754e5e
+                            theme.destructive
                         })),
                 )
                 .child(
@@ -140,7 +148,7 @@ impl super::Emerald {
             .flex_1()
             .min_h(px(0.0))
             .overflow_hidden()
-            .bg(rgb(0x20272b))
+            .bg(rgb(theme.graph_background))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::graph_pan_start))
             .on_mouse_move(cx.listener(Self::graph_pan_move))
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::graph_pan_end))
@@ -152,7 +160,7 @@ impl super::Emerald {
             .flex_col()
             .flex_1()
             .min_h(px(0.0))
-            .bg(rgb(0x20272b))
+            .bg(rgb(theme.graph_background))
             .child(surface)
             .child(
                 div()
@@ -167,7 +175,7 @@ impl super::Emerald {
                             .px_3()
                             .py_2()
                             .rounded_md()
-                            .bg(rgb(0x303a3f))
+                            .bg(rgb(theme.menu))
                             .text_color(rgb(theme.text))
                             .child("Graph view"),
                     )
@@ -176,7 +184,7 @@ impl super::Emerald {
                             .px_3()
                             .py_2()
                             .rounded_md()
-                            .bg(rgb(0x303a3f))
+                            .bg(rgb(theme.menu))
                             .text_color(rgb(theme.muted_text))
                             .child(format!(
                                 "{} notes · {} links",
@@ -197,7 +205,7 @@ impl super::Emerald {
                             .px_3()
                             .py_2()
                             .rounded_md()
-                            .bg(rgb(0x303a3f))
+                            .bg(rgb(theme.menu))
                             .text_color(rgb(theme.muted_text))
                             .child("⌕  Search files"),
                     )
@@ -206,23 +214,25 @@ impl super::Emerald {
                             .px_3()
                             .py_2()
                             .rounded_md()
-                            .bg(rgb(0x303a3f))
+                            .bg(rgb(theme.menu))
                             .text_color(rgb(theme.text))
                             .child(format!("{}%", (zoom * 100.0) as u32)),
                     )
                     .child(
                         div()
+                            .id("graph-settings")
+                            .role(gpui::Role::Button)
+                            .aria_label("Graph settings")
+                            .tab_stop(true)
+                            .focus_visible(|button| button.bg(rgb(theme.hover)))
                             .px_3()
                             .py_2()
                             .rounded_md()
-                            .bg(rgb(0x303a3f))
+                            .bg(rgb(theme.menu))
                             .cursor_pointer()
                             .text_color(rgb(theme.text))
                             .child("⚙")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(Self::toggle_graph_settings),
-                            ),
+                            .on_click(cx.listener(Self::toggle_graph_settings)),
                     ),
             )
             .when(self.interaction.graph_settings, |panel| {
@@ -233,16 +243,8 @@ impl super::Emerald {
 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::should_open_graph_node;
-
-    #[test]
-    fn graph_nodes_open_only_on_double_click() {
-        assert!(!should_open_graph_node(1));
-        assert!(should_open_graph_node(2));
-        assert!(!should_open_graph_node(3));
-    }
-}
+#[path = "tests/graph_view.rs"]
+mod tests;
 
 fn graph_settings(theme: emerald::theme::EmeraldTheme) -> impl IntoElement {
     div()
@@ -252,7 +254,7 @@ fn graph_settings(theme: emerald::theme::EmeraldTheme) -> impl IntoElement {
         .w(px(286.0))
         .p_4()
         .rounded_lg()
-        .bg(rgb(0x303a3f))
+        .bg(rgb(theme.menu))
         .border_1()
         .border_color(rgb(theme.panel_border))
         .text_color(rgb(theme.text))
@@ -279,7 +281,7 @@ fn graph_settings(theme: emerald::theme::EmeraldTheme) -> impl IntoElement {
             div()
                 .mt_2()
                 .p_2()
-                .bg(rgb(0x20272b))
+                .bg(rgb(theme.sidebar))
                 .text_color(rgb(theme.muted_text))
                 .child("Search files"),
         )

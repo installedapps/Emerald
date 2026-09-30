@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Emerald is a Rust 2021 desktop AsciiDoc editor built with GPUI.
+Emerald is a Rust  desktop AsciiDoc editor built with GPUI.
 
 - `src/main.rs` contains the application entry point and GPUI event/render wiring.
 - `src/lib.rs` exposes editor state and editing commands; supporting modules cover

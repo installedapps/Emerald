@@ -95,21 +95,145 @@ pub struct RenderSnapshot {
     pub style: RenderStyle,
 }
 
+/// Converts source into the parsed representation consumed by preview stages.
+pub trait DocumentParser: Send + Sync {
+    fn parse(&self, source: &str) -> ParsedDocument;
+}
+
+/// Converts parsed content into the blocks understood by the preview UI.
+pub trait BlockRenderer: Send + Sync {
+    fn render(
+        &self,
+        source: &str,
+        parsed: &ParsedDocument,
+        options: &RenderOptions,
+    ) -> Vec<RenderBlock>;
+}
+
+/// Precomputes content-dependent data reused while a snapshot is displayed.
+pub trait PreviewPreparer: Send + Sync {
+    fn prepare(&self, blocks: &[RenderBlock]) -> crate::preview::PreparedPreview;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RenderOptions {
+    pub toc: TocPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TocPolicy {
+    /// Follow the `:toc:` attribute in the source.
+    #[default]
+    Source,
+    Disabled,
+    Enabled,
+}
+
+/// Coordinates parsing, block rendering, and preview preparation.
+///
+/// Implementations are injected at the document stage boundaries, keeping the
+/// pipeline independent of GPUI and workspace identity.
+#[derive(Clone)]
+pub struct PreviewPipeline {
+    parser: Arc<dyn DocumentParser>,
+    renderer: Arc<dyn BlockRenderer>,
+    preparer: Arc<dyn PreviewPreparer>,
+}
+
+impl PreviewPipeline {
+    pub fn new(
+        parser: Arc<dyn DocumentParser>,
+        renderer: Arc<dyn BlockRenderer>,
+        preparer: Arc<dyn PreviewPreparer>,
+    ) -> Self {
+        Self {
+            parser,
+            renderer,
+            preparer,
+        }
+    }
+
+    pub fn parse(&self, source: &str) -> ParsedDocument {
+        self.parser.parse(source)
+    }
+
+    pub fn snapshot(&self, source: &str, parsed: &ParsedDocument) -> RenderSnapshot {
+        self.snapshot_with_options(source, parsed, &RenderOptions::default())
+    }
+
+    pub fn snapshot_with_options(
+        &self,
+        source: &str,
+        parsed: &ParsedDocument,
+        options: &RenderOptions,
+    ) -> RenderSnapshot {
+        let blocks = Arc::new(self.renderer.render(source, parsed, options));
+        RenderSnapshot {
+            report: parsed.report.clone(),
+            rows: Arc::new(crate::preview::PreviewRow::prepare(&blocks)),
+            prepared: Arc::new(self.preparer.prepare(&blocks)),
+            blocks,
+            style: RenderStyle::from_source(source),
+        }
+    }
+}
+
+impl Default for PreviewPipeline {
+    fn default() -> Self {
+        Self::new(
+            Arc::new(AsciiDocParser),
+            Arc::new(AsciiDocBlockRenderer),
+            Arc::new(DefaultPreviewPreparer),
+        )
+    }
+}
+
 impl RenderSnapshot {
     pub fn from_source(source: &str) -> Self {
-        Self::from_parsed(source, ParsedDocument::from_source(source))
+        let pipeline = PreviewPipeline::default();
+        let parsed = pipeline.parse(source);
+        pipeline.snapshot(source, &parsed)
     }
 
     pub fn from_parsed(source: &str, parsed: ParsedDocument) -> Self {
-        let blocks = render_parsed_blocks(parsed.blocks, has_table_of_contents(source));
-        let rows = Arc::new(crate::preview::PreviewRow::prepare(&blocks));
-        Self {
-            prepared: Arc::new(crate::preview::PreparedPreview::new(&blocks)),
-            report: parsed.report.clone(),
-            blocks: Arc::new(blocks),
-            rows,
-            style: RenderStyle::from_source(source),
-        }
+        PreviewPipeline::default().snapshot(source, &parsed)
+    }
+}
+
+#[derive(Default)]
+pub struct AsciiDocParser;
+
+impl DocumentParser for AsciiDocParser {
+    fn parse(&self, source: &str) -> ParsedDocument {
+        ParsedDocument::from_source(source)
+    }
+}
+
+#[derive(Default)]
+pub struct AsciiDocBlockRenderer;
+
+impl BlockRenderer for AsciiDocBlockRenderer {
+    fn render(
+        &self,
+        source: &str,
+        parsed: &ParsedDocument,
+        options: &RenderOptions,
+    ) -> Vec<RenderBlock> {
+        let include_toc = match options.toc {
+            TocPolicy::Source => has_table_of_contents(source),
+            TocPolicy::Disabled => false,
+            TocPolicy::Enabled => true,
+        };
+        render_parsed_blocks(&parsed.blocks, include_toc)
+    }
+}
+
+#[derive(Default)]
+pub struct DefaultPreviewPreparer;
+
+impl PreviewPreparer for DefaultPreviewPreparer {
+    fn prepare(&self, blocks: &[RenderBlock]) -> crate::preview::PreparedPreview {
+        crate::preview::PreparedPreview::new(blocks)
     }
 }
 
@@ -119,11 +243,25 @@ struct CachedRender {
     snapshot: RenderSnapshot,
 }
 
-#[derive(Default)]
 pub struct RenderCache {
     entries: std::collections::HashMap<PathBuf, CachedRender>,
+    pipeline: PreviewPipeline,
 }
+
+impl Default for RenderCache {
+    fn default() -> Self {
+        Self::with_pipeline(PreviewPipeline::default())
+    }
+}
+
 impl RenderCache {
+    pub fn with_pipeline(pipeline: PreviewPipeline) -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            pipeline,
+        }
+    }
+
     /// Reuse prepared blocks on interaction-only frames. A missing parse means
     /// edits are pending: keep the last preview instead of parsing during render.
     pub fn snapshot_for_revision(
@@ -143,7 +281,7 @@ impl RenderCache {
                         CachedRender {
                             content_revision: revision,
                             document_revision: Some(text_revision),
-                            snapshot: RenderSnapshot::from_parsed(source, parsed.clone()),
+                            snapshot: self.pipeline.snapshot(source, parsed),
                         },
                     );
                 } else {
@@ -173,11 +311,7 @@ impl RenderCache {
     }
 
     pub fn insert_parsed(&mut self, source_file: PathBuf, source: &str, parsed: ParsedDocument) {
-        self.insert(
-            source_file,
-            source,
-            RenderSnapshot::from_parsed(source, parsed),
-        );
+        self.insert(source_file, source, self.pipeline.snapshot(source, &parsed));
     }
     fn refresh(&mut self, source: &str, source_file: &Path) -> &RenderSnapshot {
         let revision = content_revision(source);
@@ -191,7 +325,10 @@ impl RenderCache {
                 CachedRender {
                     content_revision: revision,
                     document_revision: None,
-                    snapshot: RenderSnapshot::from_source(source),
+                    snapshot: {
+                        let parsed = self.pipeline.parse(source);
+                        self.pipeline.snapshot(source, &parsed)
+                    },
                 },
             );
         }
@@ -300,37 +437,45 @@ fn apply_css_color(style: &mut RenderStyle, selector: &str, property: &str, colo
     }
 }
 pub fn render_blocks(source: &str) -> Vec<RenderBlock> {
-    render_parsed_blocks(
-        ParsedDocument::from_source(source).blocks,
-        has_table_of_contents(source),
-    )
+    let parsed = ParsedDocument::from_source(source);
+    AsciiDocBlockRenderer.render(source, &parsed, &RenderOptions::default())
 }
 
-fn render_parsed_blocks(parsed_blocks: Vec<ParsedBlock>, include_toc: bool) -> Vec<RenderBlock> {
+fn render_parsed_blocks(parsed_blocks: &[ParsedBlock], include_toc: bool) -> Vec<RenderBlock> {
     let mut blocks = parsed_blocks
         .into_iter()
         .map(|b| match b {
-            ParsedBlock::Heading { level, text } => RenderBlock::Heading { level, text },
-            ParsedBlock::Paragraph(t) => RenderBlock::Paragraph(t),
-            ParsedBlock::Image { target, alt, width } => RenderBlock::Image { target, alt, width },
+            ParsedBlock::Heading { level, text } => RenderBlock::Heading {
+                level: *level,
+                text: text.clone(),
+            },
+            ParsedBlock::Paragraph(t) => RenderBlock::Paragraph(t.clone()),
+            ParsedBlock::Image { target, alt, width } => RenderBlock::Image {
+                target: target.clone(),
+                alt: alt.clone(),
+                width: *width,
+            },
             ParsedBlock::ThematicBreak => RenderBlock::ThematicBreak,
-            ParsedBlock::UnorderedList(v) => RenderBlock::UnorderedList(v),
-            ParsedBlock::OrderedList(v) => RenderBlock::OrderedList(v),
-            ParsedBlock::Quote(t) => RenderBlock::Quote(t),
+            ParsedBlock::UnorderedList(v) => RenderBlock::UnorderedList(v.clone()),
+            ParsedBlock::OrderedList(v) => RenderBlock::OrderedList(v.clone()),
+            ParsedBlock::Quote(t) => RenderBlock::Quote(t.clone()),
             ParsedBlock::Admonition { kind, blocks } => RenderBlock::Admonition {
-                kind,
+                kind: kind.clone(),
                 blocks: render_parsed_blocks(blocks, false),
             },
-            ParsedBlock::Table(v) => RenderBlock::Table(v),
-            ParsedBlock::Code { language, code } => RenderBlock::Code { language, code },
+            ParsedBlock::Table(v) => RenderBlock::Table(v.clone()),
+            ParsedBlock::Code { language, code } => RenderBlock::Code {
+                language: language.clone(),
+                code: code.clone(),
+            },
             ParsedBlock::Diagram {
                 kind,
                 title,
                 source,
             } => RenderBlock::Diagram {
-                kind,
-                title,
-                source,
+                kind: kind.clone(),
+                title: title.clone(),
+                source: source.clone(),
             },
         })
         .collect::<Vec<_>>();
@@ -375,217 +520,5 @@ pub fn diagram_edges(source: &str) -> Vec<DiagramEdge> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn renders_block_image_macros_with_alt_text_and_width() {
-        assert_eq!(
-            render_blocks("Before.\n\nimage::Test.jpg[Photo,640]\n\nAfter."),
-            vec![
-                RenderBlock::Paragraph("Before.".into()),
-                RenderBlock::Image {
-                    target: "Test.jpg".into(),
-                    alt: "Photo".into(),
-                    width: Some(640),
-                },
-                RenderBlock::Paragraph("After.".into()),
-            ]
-        );
-        assert_eq!(
-            render_blocks("An inline image: image:icon.png[Icon,24]."),
-            vec![RenderBlock::Paragraph(
-                "An inline image: image:icon.png[Icon,24].".into()
-            )]
-        );
-    }
-
-    #[test]
-    fn renders_inline_and_block_admonitions_with_their_contents() {
-        for kind in ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"] {
-            let expected = RenderBlock::Admonition {
-                kind: kind.into(),
-                blocks: vec![RenderBlock::Paragraph("Some note text.".into())],
-            };
-            for source in [
-                format!("{kind}: Some note text."),
-                format!("[{kind}]\n====\nSome note text.\n===="),
-            ] {
-                assert_eq!(render_blocks(&source), vec![expected.clone()], "{source}");
-            }
-        }
-        assert_eq!(
-            render_blocks(
-                "[NOTE]\n====\nFirst paragraph.\n\nSecond paragraph.\n\n* One\n* Two\n===="
-            ),
-            vec![RenderBlock::Admonition {
-                kind: "NOTE".into(),
-                blocks: vec![
-                    RenderBlock::Paragraph("First paragraph.".into()),
-                    RenderBlock::Paragraph("Second paragraph.".into()),
-                    RenderBlock::UnorderedList(vec!["One".into(), "Two".into()]),
-                ],
-            }]
-        );
-    }
-
-    #[test]
-    fn renders_thematic_breaks_between_paragraphs() {
-        for marker in ["'''", "---", "***", "- - -", "* * *"] {
-            assert_eq!(
-                render_blocks(&format!("Before.\n\n{marker}\n\nAfter.")),
-                vec![
-                    RenderBlock::Paragraph("Before.".into()),
-                    RenderBlock::ThematicBreak,
-                    RenderBlock::Paragraph("After.".into()),
-                ],
-                "{marker}"
-            );
-        }
-        assert!(matches!(
-            render_blocks("----\ncode\n----").as_slice(),
-            [RenderBlock::Code { .. }]
-        ));
-    }
-
-    #[test]
-    fn renders_headings_and_paragraphs_without_an_implicit_table_of_contents() {
-        let blocks = render_blocks("= Title\n\nA paragraph.");
-        assert!(matches!(blocks[0], RenderBlock::Heading { level: 1, .. }));
-        assert!(matches!(blocks[1], RenderBlock::Paragraph(_)));
-    }
-
-    #[test]
-    fn renders_an_explicit_table_of_contents_before_headings() {
-        let blocks = render_blocks(":toc:\n\n= Title\n\nA paragraph.");
-        assert!(matches!(blocks[0], RenderBlock::TableOfContents(_)));
-        assert!(matches!(blocks[1], RenderBlock::Heading { level: 1, .. }));
-        assert!(matches!(blocks[2], RenderBlock::Paragraph(_)));
-    }
-
-    #[test]
-    fn renders_xref_notes_with_headings_and_paragraphs() {
-        for (source, heading, paragraph, link_text) in [
-            (
-                "= Test 1\n\nThis is the first test note.\n\nGo to xref:test-2.adoc[Test 2].\n",
-                "Test 1",
-                "This is the first test note.",
-                "Go to xref:test-2.adoc[Test 2].",
-            ),
-            (
-                "= Test 2\n\nThis is the second test note.\n\nBack to xref:test-1.adoc[Test 1].\n",
-                "Test 2",
-                "This is the second test note.",
-                "Back to xref:test-1.adoc[Test 1].",
-            ),
-        ] {
-            let blocks = render_blocks(source);
-            assert!(
-                matches!(blocks[0], RenderBlock::Heading { level: 1, ref text } if text == heading)
-            );
-            assert!(matches!(blocks[1], RenderBlock::Paragraph(ref text) if text == paragraph));
-            assert!(matches!(blocks[2], RenderBlock::Paragraph(ref text) if text == link_text));
-        }
-    }
-
-    #[test]
-    fn extracts_diagram_edges_for_the_preview() {
-        let edges = diagram_edges("A -> B\nB -> C");
-        assert_eq!(edges[0].from, "A");
-        assert_eq!(edges[1].to, "C");
-    }
-
-    #[test]
-    fn interaction_frames_reuse_blocks_and_pending_edits_keep_the_last_preview() {
-        let mut cache = RenderCache::default();
-        let file = Path::new("note.adoc");
-        let source = "= Original";
-        let parsed = ParsedDocument::from_source(source);
-        let first = cache
-            .snapshot_for_revision(source, file, 1, Some(&parsed))
-            .unwrap()
-            .blocks
-            .clone();
-        let prepared = cache
-            .snapshot_for_revision(source, file, 1, Some(&parsed))
-            .unwrap()
-            .prepared
-            .clone();
-        for _ in 0..100 {
-            let frame = cache
-                .snapshot_for_revision(source, file, 1, Some(&parsed))
-                .unwrap();
-            assert!(Arc::ptr_eq(&first, &frame.blocks));
-            assert!(Arc::ptr_eq(&prepared, &frame.prepared));
-        }
-        let pending = cache
-            .snapshot_for_revision("= Changed", file, 2, None)
-            .unwrap();
-        assert!(Arc::ptr_eq(&first, &pending.blocks));
-        assert!(Arc::ptr_eq(&prepared, &pending.prepared));
-        let updated = ParsedDocument::from_source("= Changed");
-        let ready = cache
-            .snapshot_for_revision("= Changed", file, 2, Some(&updated))
-            .unwrap();
-        assert!(!Arc::ptr_eq(&first, &ready.blocks));
-        assert!(!Arc::ptr_eq(&prepared, &ready.prepared));
-        assert_eq!(ready.prepared.inline("Changed")[0].text.as_ref(), "Changed");
-        assert!(matches!(&ready.blocks[0], RenderBlock::Heading { text, .. } if text == "Changed"));
-        assert!(cache
-            .snapshot_for_revision("", Path::new("other.adoc"), 3, None)
-            .is_none());
-    }
-
-    #[test]
-    fn revision_lookup_reuses_a_snapshot_prepared_during_file_loading() {
-        let mut cache = RenderCache::default();
-        let file = PathBuf::from("note.adoc");
-        let source = "= Loaded";
-        let parsed = ParsedDocument::from_source(source);
-        let snapshot = RenderSnapshot::from_parsed(source, parsed.clone());
-        let blocks = snapshot.blocks.clone();
-        cache.insert(file.clone(), source, snapshot);
-        let frame = cache
-            .snapshot_for_revision(source, &file, 4, Some(&parsed))
-            .unwrap();
-        assert!(Arc::ptr_eq(&blocks, &frame.blocks));
-    }
-
-    #[test]
-    fn keeps_rendered_snapshots_for_multiple_files() {
-        let mut cache = RenderCache::default();
-        let first = PathBuf::from("first.adoc");
-        let second = PathBuf::from("second.adoc");
-
-        let first_blocks = cache.blocks_arc("= First", &first);
-        let _ = cache.blocks_arc("= Second", &second);
-        let first_blocks_again = cache.blocks_arc("= First", &first);
-
-        assert!(Arc::ptr_eq(&first_blocks, &first_blocks_again));
-    }
-
-    #[test]
-    fn applies_each_note_css_palette_including_custom_properties() {
-        let style = RenderStyle::from_source(
-            r#"++++
-<style>
-:root { --note-bg: #101820; --note-text: #f2f4f8; --note-accent: #ffb86c; }
-body { background: var(--note-bg); color: var(--note-text); }
-h1, h2 { color: var(--note-accent) !important; }
-</style>
-++++"#,
-        );
-
-        assert_eq!(style.panel, Some(0x101820));
-        assert_eq!(style.text, Some(0xf2f4f8));
-        assert_eq!(style.heading, Some(0xffb86c));
-    }
-
-    #[test]
-    fn notes_without_custom_css_leave_the_standard_theme_as_fallback() {
-        assert_eq!(
-            RenderStyle::from_source("= Plain note"),
-            RenderStyle::default()
-        );
-    }
-}
+#[path = "tests/rendered.rs"]
+mod tests;

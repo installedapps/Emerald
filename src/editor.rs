@@ -7,7 +7,7 @@ impl super::Emerald {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = EVERFOREST_DARK;
+        let theme = self.theme();
         let file_title = if self.interaction.renaming {
             self.interaction.rename_buffer.clone()
         } else {
@@ -41,6 +41,15 @@ impl super::Emerald {
         );
         let text = self.state.text();
         let active_path = self.state.active_file().to_path_buf();
+        let source_view_active =
+            self.interaction.source_revealed || self.state.selection().is_some();
+        let scrollbar_state = if source_view_active {
+            self.source_list_state.clone()
+        } else {
+            self.document_list_state.clone()
+        };
+        let accent_color = rgb(theme.accent);
+        let accent_glow: gpui::Hsla = accent_color.into();
         let snapshot = self.render_cache.snapshot_for_revision(
             text,
             &active_path,
@@ -87,6 +96,7 @@ impl super::Emerald {
             .min_h(px(0.0))
             .min_w(px(0.0))
             .m(px(chrome.margin))
+            .max_w(px(980.0))
             .p(px(DOCUMENT_PADDING_X))
             .bg(rgb(style.panel.unwrap_or(theme.panel)))
             .border_1()
@@ -111,15 +121,15 @@ impl super::Emerald {
             .flex_col()
             .flex_1()
             .size_full()
-            .bg(rgb(theme.background))
+            .bg(rgb(theme.window_background))
             .when_some(self.interaction.file_load_error.clone(), |panel, error| {
                 panel.child(
                     div()
                         .mx(px(20.0))
                         .mt(px(8.0))
                         .p_2()
-                        .bg(rgb(0x5b2727))
-                        .text_color(rgb(0xffb4a8))
+                        .bg(rgb(theme.destructive))
+                        .text_color(rgb(theme.text))
                         .child(error),
                 )
             })
@@ -147,37 +157,51 @@ impl super::Emerald {
                                 div()
                                     .flex()
                                     .items_center()
-                                    .px_2()
-                                    .border_1()
-                                    .border_color(rgb(if self.interaction.renaming {
-                                        theme.accent
-                                    } else {
-                                        theme.sidebar
-                                    }))
-                                    .rounded_sm()
-                                    .cursor_text()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|view, _, window, cx| {
-                                            view.begin_rename(
-                                                view.state.active_file().to_path_buf(),
-                                                window,
-                                                cx,
-                                            );
-                                        }),
-                                    )
-                                    .child(file_title)
-                                    .when(self.interaction.renaming, |title| {
-                                        title.child(div().w(px(2.0)).h(px(18.0)).bg(rgb(
-                                            if self.blink_cursor.visible() {
+                                    .gap_2()
+                                    .child(self.sidebar_toggle_button(false, cx))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .px_2()
+                                            .border_1()
+                                            .border_color(rgb(if self.interaction.renaming {
                                                 theme.accent
                                             } else {
                                                 theme.sidebar
-                                            },
-                                        )))
-                                    }),
+                                            }))
+                                            .rounded_sm()
+                                            .cursor_text()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|view, _, window, cx| {
+                                                    view.begin_rename(
+                                                        view.state.active_file().to_path_buf(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child(file_title)
+                                            .when(self.interaction.renaming, |title| {
+                                                title.child(div().w(px(2.0)).h(px(18.0)).bg(rgb(
+                                                    if self.blink_cursor.visible() {
+                                                        theme.accent
+                                                    } else {
+                                                        theme.sidebar
+                                                    },
+                                                )))
+                                            }),
+                                    ),
                             )
-                            .child(status),
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(status)
+                                    .child(self.sidebar_toggle_button(true, cx)),
+                            ),
                     )
                     .child(
                         div()
@@ -189,52 +213,73 @@ impl super::Emerald {
                             .min_w(px(0.0))
                             .child(
                                 div()
+                                    .relative()
                                     .flex()
                                     .flex_1()
+                                    .justify_center()
                                     .w_full()
                                     .min_h(px(0.0))
                                     .min_w(px(0.0))
-                                    .child(document.child(
-                                        if self.interaction.source_revealed
-                                            || self.state.selection().is_some()
-                                        {
-                                            self.render_source(cx.entity(), window)
-                                        } else {
-                                            let list_state = self.document_list_state.clone();
-                                            let entity = cx.entity();
-                                            let document_path = active_path.clone();
-                                            list(list_state, move |index, _, _| {
-                                                Self::render_preview_row(
-                                                    index,
-                                                    &rows[index],
-                                                    &blocks,
-                                                    style,
-                                                    &prepared,
-                                                    &document_path,
-                                                    entity.clone(),
-                                                )
-                                            })
-                                            .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
-                                            .w_full()
-                                            .h_full()
-                                            .into_any_element()
-                                        },
-                                    ))
+                                    .child(document.child(if source_view_active {
+                                        self.render_source(cx.entity(), window)
+                                    } else {
+                                        let list_state = self.document_list_state.clone();
+                                        let entity = cx.entity();
+                                        let document_path = active_path.clone();
+                                        list(list_state, move |index, _, _| {
+                                            Self::render_preview_row(
+                                                index,
+                                                &rows[index],
+                                                &blocks,
+                                                style,
+                                                theme,
+                                                &prepared,
+                                                &document_path,
+                                                entity.clone(),
+                                            )
+                                        })
+                                        .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+                                        .w_full()
+                                        .h_full()
+                                        .into_any_element()
+                                    }))
                                     .child(
                                         div()
-                                            .id("document-scrollbar-vertical")
-                                            .w(px(12.0))
-                                            .h_full()
-                                            .bg(rgb(theme.sidebar))
-                                            .border_l_1()
-                                            .border_color(rgb(theme.panel_border))
-                                            .cursor_pointer()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(Self::scroll_document_to_bottom),
-                                            )
+                                            .absolute()
+                                            .top_0()
+                                            .bottom_0()
+                                            .right_0()
+                                            .w(gpui_base::Scrollbar::width())
+                                            .hover(|rail| {
+                                                rail.shadow(vec![gpui::BoxShadow::new(
+                                                    px(0.0),
+                                                    px(0.0),
+                                                    accent_glow.opacity(0.45),
+                                                )
+                                                .blur_radius(px(14.0))
+                                                .spread_radius(px(1.0))])
+                                            })
                                             .child(
-                                                div().w_full().h(px(80.0)).bg(rgb(theme.accent)),
+                                                gpui_base::Scrollbar::vertical(&scrollbar_state)
+                                                    .id("document-scrollbar-vertical")
+                                                    .mode(gpui_base::ScrollbarMode::Always)
+                                                    .styles(|styles| {
+                                                        styles
+                                                            .thumb(|thumb| {
+                                                                thumb.bg(rgb(theme.faint_text)
+                                                                    .opacity(0.42))
+                                                            })
+                                                            .track_hover(|track| {
+                                                                track.bg(accent_glow.opacity(0.12))
+                                                            })
+                                                            .thumb_hover(|thumb| {
+                                                                thumb.bg(accent_color)
+                                                            })
+                                                            .thumb_active(|thumb| {
+                                                                thumb.bg(accent_color)
+                                                            })
+                                                    })
+                                                    .viewport_from_layout(),
                                             ),
                                     ),
                             ),

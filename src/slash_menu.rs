@@ -86,9 +86,9 @@ impl Emerald {
                     .p_2()
                     .cursor_pointer()
                     .when(row == search.selected, |item| {
-                        item.bg(rgb(EVERFOREST_DARK.selection))
+                        item.bg(rgb(self.theme().selection))
                     })
-                    .hover(|style| style.bg(rgb(EVERFOREST_DARK.selection)))
+                    .hover(|style| style.bg(rgb(self.theme().selection)))
                     .child(COMMANDS[index].label)
                     .on_mouse_down(
                         MouseButton::Left,

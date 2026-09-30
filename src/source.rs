@@ -6,12 +6,12 @@ use gpui::{canvas, fill, point};
 impl super::Emerald {
     pub(super) fn render_source_line(
         line: source_layout::SourceRowLayout,
+        theme: emerald::theme::EmeraldTheme,
         cursor: usize,
         selection: Option<&emerald::Selection>,
         cursor_visible: bool,
         geometry: Rc<RefCell<Vec<SourceRowGeometry>>>,
     ) -> AnyElement {
-        let theme = EVERFOREST_DARK;
         let line_start = line.range.start;
         let selected = selection.and_then(|selection| {
             let start = selection.start.max(line.range.start);
@@ -103,6 +103,7 @@ impl super::Emerald {
             f32::from(window.viewport_size().width).max(1.0)
         };
         let text_revision = self.state.text_revision();
+        let theme = self.theme();
         let cursor = self.state.cursor();
         let selection = self.state.selection();
         let file = self.state.active_file().to_path_buf();
@@ -111,6 +112,12 @@ impl super::Emerald {
             .source_lines_cache
             .as_ref()
             .is_none_or(|cache| cache.text_revision != text_revision || cache.file != file);
+        let content_changed = content_changed
+            || self
+                .interaction
+                .source_lines_cache
+                .as_ref()
+                .is_some_and(|cache| cache.theme_text != theme.text);
         let width_changed = self
             .interaction
             .source_lines_cache
@@ -131,6 +138,7 @@ impl super::Emerald {
             }
             self.interaction.source_lines_cache = Some(SourceLinesCache {
                 wrap_width,
+                theme_text: theme.text,
                 text_revision,
                 file,
                 text,
@@ -159,6 +167,7 @@ impl super::Emerald {
                 &text[range.clone()],
                 range.start,
                 wrap_width,
+                theme.text,
                 window,
             );
             div()
@@ -168,6 +177,7 @@ impl super::Emerald {
                 .children(rows.iter().map(|row| {
                     Self::render_source_line(
                         row.clone(),
+                        theme,
                         cursor,
                         selection.as_ref(),
                         cursor_visible,
@@ -263,6 +273,7 @@ impl super::Emerald {
         text: &str,
         prepared: &PreparedPreview,
         document_path: &std::path::Path,
+        theme: emerald::theme::EmeraldTheme,
         entity: gpui::Entity<Emerald>,
     ) -> Vec<AnyElement> {
         prepared
@@ -290,7 +301,7 @@ impl super::Emerald {
                     let target = target.clone();
                     let entity = entity.clone();
                     element
-                        .text_color(rgb(EVERFOREST_DARK.accent))
+                        .text_color(rgb(theme.accent))
                         .underline()
                         .cursor_pointer()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {

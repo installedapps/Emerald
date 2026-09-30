@@ -26,8 +26,9 @@ impl PreviewFixture {
         let rows = self.rows.clone();
         let entity = self.entity.clone();
         let prepared = self.prepared.clone();
+        let scrollbar_state = self.state.clone();
         cx.draw(point(px(0.), px(0.)), size(px(width), px(300.)), |_, cx| {
-            let element = list(self.state.clone(), move |index, _, _| {
+            let content = list(self.state.clone(), move |index, _, _| {
                 let row = &rows[index];
                 // Count the children actually handed to the production renderer,
                 // not elapsed time, which is noisy on CI.
@@ -44,6 +45,7 @@ impl PreviewFixture {
                     row,
                     &blocks,
                     RenderStyle::default(),
+                    emerald::theme::EVERFOREST_DARK,
                     &prepared,
                     std::path::Path::new("note.adoc"),
                     entity.clone(),
@@ -51,13 +53,50 @@ impl PreviewFixture {
             })
             .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
             .w_full()
-            .h_full()
-            .into_any_element();
+            .h_full();
+            let element = div()
+                .relative()
+                .size_full()
+                .child(content)
+                .child(
+                    div().absolute().inset_0().child(
+                        gpui_base::Scrollbar::vertical(&scrollbar_state)
+                            .mode(gpui_base::ScrollbarMode::Always)
+                            .viewport_from_layout(),
+                    ),
+                )
+                .into_any_element();
             cx.new(|_| DrawPreview(Some(element))).into_any_element()
         });
         let count = *work.borrow();
         count
     }
+}
+
+#[gpui::test]
+fn document_scrollbar_track_click_moves_the_list(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let state = EditorState::open_or_create(temp.path()).unwrap();
+    let cx = cx.add_empty_window();
+    let entity = cx.new(|cx| Emerald::with_state(state, cx));
+    let blocks = Arc::new(vec![RenderBlock::UnorderedList(
+        (0..1_000).map(|index| format!("item {index}")).collect(),
+    )]);
+    let rows = Arc::new(PreviewRow::prepare(&blocks));
+    let fixture = PreviewFixture {
+        state: ListState::new(rows.len(), ListAlignment::Top, px(300.)),
+        prepared: Arc::new(emerald::preview::PreparedPreview::new(&blocks)),
+        entity,
+        blocks,
+        rows,
+    };
+
+    fixture.draw(cx, 600.);
+    let before = fixture.state.logical_scroll_top();
+    cx.simulate_click(point(px(595.), px(260.)), gpui::Modifiers::default());
+    fixture.draw(cx, 600.);
+
+    assert!(fixture.state.logical_scroll_top().item_ix > before.item_ix);
 }
 
 fn scroll(cx: &mut VisualTestContext, delta: f32) {

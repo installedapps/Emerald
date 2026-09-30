@@ -6,15 +6,17 @@ impl super::Emerald {
         layout: ShellLayout,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = EVERFOREST_DARK;
+        let theme = self.theme();
+        let width = self.interaction.sidebar_width;
         let workspace = self.state.workspace_root().display().to_string();
 
         let sidebar = div()
+            .relative()
             .flex()
             .flex_col()
             .gap_3()
-            .w(px(layout.sidebar_width))
-            .p_4()
+            .w(px(width))
+            .p_3()
             .bg(rgb(theme.sidebar))
             .border_r_1()
             .border_color(rgb(theme.panel_border));
@@ -43,34 +45,63 @@ impl super::Emerald {
         .min_h(px(0.0))
         .w_full();
 
-        sidebar
+        let sidebar = sidebar
             .child(
                 div()
-                    .text_sm()
-                    .text_color(rgb(theme.accent))
-                    .child("EMERALD"),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(theme.accent))
+                            .child("EMERALD"),
+                    )
+                    .child(
+                        div()
+                            .id("theme-picker")
+                            .role(gpui::Role::Button)
+                            .aria_label("Choose color theme")
+                            .tab_stop(true)
+                            .focus_visible(|button| {
+                                button.bg(rgb(theme.hover)).text_color(rgb(theme.text))
+                            })
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_xs()
+                            .text_color(rgb(theme.muted_text))
+                            .hover(|button| button.bg(rgb(theme.hover)).text_color(rgb(theme.text)))
+                            .cursor_pointer()
+                            .child(format!("◐ {}", theme.name))
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                cx.stop_propagation();
+                                view.interaction.context_menu = Some(ContextMenu::Themes {
+                                    position: gpui::point(px(220.0), px(80.0)),
+                                });
+                                cx.notify();
+                            })),
+                    ),
             )
             .child(
                 div()
                     .flex()
-                    .gap_1()
+                    .gap_2()
                     .child(
-                        toolbar_button("new-file", "＋", theme, true)
-                            .on_mouse_down(MouseButton::Left, cx.listener(Self::create_new_file)),
+                        toolbar_button("new-file", "＋", "Create note", theme, true)
+                            .on_click(cx.listener(Self::create_new_file)),
                     )
                     .child(
-                        toolbar_button("save", "⇩", theme, false)
-                            .on_mouse_down(MouseButton::Left, cx.listener(Self::save_current_file)),
+                        toolbar_button("save", "⇩", "Save note", theme, false)
+                            .on_click(cx.listener(Self::save_current_file)),
                     )
                     .child(
-                        toolbar_button("open", "↗", theme, false)
-                            .on_mouse_down(MouseButton::Left, cx.listener(Self::open_file)),
+                        toolbar_button("open", "↗", "Open note", theme, false)
+                            .on_click(cx.listener(Self::open_file)),
                     )
                     .child(
-                        toolbar_button("delete", "⌫", theme, false).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(Self::delete_current_file),
-                        ),
+                        toolbar_button("delete", "⌫", "Delete note", theme, false)
+                            .on_click(cx.listener(Self::delete_current_file)),
                     )
                     .child(
                         toolbar_button(
@@ -80,19 +111,24 @@ impl super::Emerald {
                             } else {
                                 "◎"
                             },
+                            "Toggle graph view",
                             theme,
                             self.interaction.graph_mode,
                         )
-                        .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_graph)),
+                        .on_click(cx.listener(Self::toggle_graph)),
                     ),
             )
             .child(
                 div()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .truncate()
                     .text_xs()
                     .text_color(rgb(theme.muted_text))
                     .child(workspace),
             )
-            .child(file_list)
+            .child(file_list);
+        self.sidebar_frame(false, sidebar, cx)
     }
 
     pub(super) fn render_sidebar_file(
@@ -101,7 +137,7 @@ impl super::Emerald {
         index: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = EVERFOREST_DARK;
+        let theme = self.theme();
         let is_active = file == self.state.active_file();
         let style = sidebar_file_style(theme, is_active, false);
         let hover_style = sidebar_file_style(theme, is_active, true);
@@ -110,6 +146,15 @@ impl super::Emerald {
 
         div()
             .id(("sidebar-file", index))
+            .role(gpui::Role::Button)
+            .aria_label(
+                file.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            )
+            .tab_stop(true)
+            .focus_visible(|row| row.border_color(rgb(theme.accent)))
             .h(px(30.0))
             .w_full()
             .overflow_hidden()
@@ -119,7 +164,7 @@ impl super::Emerald {
             .bg(rgb(style.background))
             .text_color(rgb(style.text))
             .cursor_pointer()
-            .rounded_sm()
+            .rounded_md()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event, window, cx| {
@@ -149,11 +194,16 @@ impl super::Emerald {
 fn toolbar_button(
     id: &'static str,
     icon: &'static str,
+    label: &'static str,
     theme: emerald::theme::EmeraldTheme,
     active: bool,
 ) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_stop(true)
+        .focus_visible(|button| button.border_color(rgb(theme.accent)))
         .w(px(32.0))
         .h(px(32.0))
         .flex()
@@ -172,7 +222,7 @@ fn toolbar_button(
             theme.panel
         }))
         .text_color(rgb(if active {
-            theme.accent
+            theme.active_file_text
         } else {
             theme.muted_text
         }))
