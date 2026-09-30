@@ -100,6 +100,13 @@ pub struct PreparedPreview {
 pub struct InlinePart {
     pub text: Arc<str>,
     pub target: Option<Arc<str>>,
+    pub image: Option<InlineImage>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineImage {
+    pub target: Arc<str>,
+    pub width: Option<u32>,
 }
 
 impl PreparedPreview {
@@ -121,26 +128,55 @@ impl PreparedPreview {
         self.inline.entry(text.to_owned()).or_insert_with(|| {
             let mut parts = Vec::new();
             let mut cursor = 0;
-            for reference in extract_references(text) {
-                if reference.start < cursor {
+            let mut items = extract_references(text)
+                .into_iter()
+                .map(|reference| {
+                    let target = reference.file_target();
+                    (
+                        reference.start,
+                        reference.end,
+                        reference.label,
+                        Some(Arc::from(target)),
+                        None,
+                    )
+                })
+                .collect::<Vec<_>>();
+            items.extend(extract_inline_images(text).into_iter().map(|image| {
+                (
+                    image.start,
+                    image.end,
+                    image.alt,
+                    None,
+                    Some(InlineImage {
+                        target: image.target.into(),
+                        width: image.width,
+                    }),
+                )
+            }));
+            items.sort_by_key(|item| item.0);
+            for (start, end, label, target, image) in items {
+                if start < cursor {
                     continue;
                 }
-                if reference.start > cursor {
+                if start > cursor {
                     parts.push(InlinePart {
-                        text: text[cursor..reference.start].into(),
+                        text: text[cursor..start].into(),
                         target: None,
+                        image: None,
                     });
                 }
                 parts.push(InlinePart {
-                    target: Some(reference.file_target().into()),
-                    text: reference.label.into(),
+                    target,
+                    text: label.into(),
+                    image,
                 });
-                cursor = reference.end;
+                cursor = end;
             }
             if cursor < text.len() || parts.is_empty() {
                 parts.push(InlinePart {
                     text: text[cursor..].into(),
                     target: None,
+                    image: None,
                 });
             }
             parts
@@ -174,15 +210,76 @@ impl PreparedPreview {
                         .entry(source.clone())
                         .or_insert_with(|| diagram_edges(source));
                 }
-                RenderBlock::Code { .. } | RenderBlock::ThematicBreak => {}
+                RenderBlock::Code { .. }
+                | RenderBlock::Image { .. }
+                | RenderBlock::ThematicBreak => {}
             }
         }
     }
 }
 
+struct InlineImageMatch {
+    start: usize,
+    end: usize,
+    target: String,
+    alt: String,
+    width: Option<u32>,
+}
+
+fn extract_inline_images(text: &str) -> Vec<InlineImageMatch> {
+    let mut images = Vec::new();
+    let mut offset = 0;
+    while let Some(relative) = text[offset..].find("image:") {
+        let start = offset + relative;
+        let target_start = start + "image:".len();
+        if text[target_start..].starts_with(':') {
+            offset = target_start + 1;
+            continue;
+        }
+        let Some(open) = text[target_start..].find('[').map(|at| target_start + at) else {
+            break;
+        };
+        let Some(close) = text[open + 1..].find(']').map(|at| open + 1 + at) else {
+            break;
+        };
+        let target = &text[target_start..open];
+        if !target.is_empty() && !target.chars().any(char::is_whitespace) {
+            let (alt, width) = text[open + 1..close]
+                .split_once(',')
+                .map_or((&text[open + 1..close], None), |(alt, width)| {
+                    (alt, width.trim_end_matches("px").parse::<u32>().ok())
+                });
+            images.push(InlineImageMatch {
+                start,
+                end: close + 1,
+                target: target.into(),
+                alt: if alt.is_empty() { target } else { alt }.into(),
+                width,
+            });
+        }
+        offset = close + 1;
+    }
+    images
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepares_inline_image_between_text_and_links() {
+        let text = "See image:images/icon.png[Icon,24] and xref:note.adoc[note].";
+        let prepared = PreparedPreview::new(&[RenderBlock::Paragraph(text.into())]);
+        let parts = prepared.inline(text);
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[1].text.as_ref(), "Icon");
+        assert_eq!(
+            parts[1].image.as_ref().unwrap().target.as_ref(),
+            "images/icon.png"
+        );
+        assert_eq!(parts[1].image.as_ref().unwrap().width, Some(24));
+        assert_eq!(parts[3].target.as_deref(), Some("note.adoc"));
+    }
 
     #[test]
     fn prepares_inline_links_and_nested_diagrams_once() {

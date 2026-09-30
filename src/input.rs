@@ -188,7 +188,7 @@ impl super::Emerald {
             return;
         }
         self.interaction.context_menu = None;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.activate(true);
         cx.stop_propagation();
         self.interaction.is_mouse_selecting = true;

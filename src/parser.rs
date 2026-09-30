@@ -16,6 +16,11 @@ pub enum ParsedBlock {
         text: String,
     },
     Paragraph(String),
+    Image {
+        target: String,
+        alt: String,
+        width: Option<u32>,
+    },
     ThematicBreak,
     UnorderedList(Vec<String>),
     OrderedList(Vec<String>),
@@ -399,6 +404,17 @@ fn extend_blocks(items: &[Block<'_>], output: &mut Vec<ParsedBlock>) {
                 );
                 output.push(ParsedBlock::Table(rows));
             }
+            BlockContent::Empty(asciidork_ast::EmptyMetadata::Image { target, attrs, .. }) => {
+                output.push(ParsedBlock::Image {
+                    target: target.to_string(),
+                    alt: attrs.str_positional_at(0).unwrap_or(target).to_string(),
+                    width: attrs
+                        .named("width")
+                        .or_else(|| attrs.str_positional_at(1))
+                        .and_then(|value| value.trim_end_matches("px").parse::<u32>().ok())
+                        .filter(|width| *width > 0),
+                });
+            }
             BlockContent::Empty(_) if block.context == BlockContext::ThematicBreak => {
                 output.push(ParsedBlock::ThematicBreak);
             }
@@ -451,6 +467,14 @@ fn inline_text(nodes: &InlineNodes<'_>) -> String {
                     .map(inline_text)
                     .unwrap_or_else(|| target.to_string())
             ),
+            Inline::Macro(asciidork_ast::MacroNode::InlineImage { target, attrs, .. }) => {
+                let alt = attrs.str_positional_at(0).unwrap_or(target);
+                let width = attrs.named("width").or_else(|| attrs.str_positional_at(1));
+                match width {
+                    Some(width) => format!("image:{}[{alt},{width}]", &target[..]),
+                    None => format!("image:{}[{alt}]", &target[..]),
+                }
+            }
             Inline::Span(_, _, children) | Inline::Quote(_, children) => inline_text(children),
             _ => node_text(node),
         })

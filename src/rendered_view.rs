@@ -1,5 +1,6 @@
 use super::*;
 use emerald::preview::PreparedPreview;
+use std::path::Path;
 
 impl super::Emerald {
     pub(super) fn render_preview_row(
@@ -8,6 +9,7 @@ impl super::Emerald {
         blocks: &[RenderBlock],
         style: RenderStyle,
         prepared: &PreparedPreview,
+        document_path: &Path,
         entity: gpui::Entity<Emerald>,
     ) -> AnyElement {
         Self::render_block_contents(
@@ -15,6 +17,7 @@ impl super::Emerald {
             &blocks[row.block_index],
             style,
             prepared,
+            document_path,
             entity,
             row,
         )
@@ -25,6 +28,7 @@ impl super::Emerald {
         block: &RenderBlock,
         style: RenderStyle,
         prepared: &PreparedPreview,
+        document_path: &Path,
         entity: gpui::Entity<Emerald>,
     ) -> AnyElement {
         Self::render_block_contents(
@@ -32,6 +36,7 @@ impl super::Emerald {
             block,
             style,
             prepared,
+            document_path,
             entity,
             &emerald::preview::PreviewRow {
                 block_index: index,
@@ -47,6 +52,7 @@ impl super::Emerald {
         block: &RenderBlock,
         style: RenderStyle,
         prepared: &PreparedPreview,
+        document_path: &Path,
         entity: gpui::Entity<Emerald>,
         slice: &emerald::preview::PreviewRow,
     ) -> AnyElement {
@@ -88,6 +94,7 @@ impl super::Emerald {
                         .children(Self::render_text_parts(
                             &entry.text,
                             prepared,
+                            document_path,
                             entity.clone(),
                         ))
                 }))
@@ -105,7 +112,12 @@ impl super::Emerald {
                     3 => 20.0,
                     _ => 18.0,
                 }))
-                .children(Self::render_text_parts(text, prepared, entity.clone()))
+                .children(Self::render_text_parts(
+                    text,
+                    prepared,
+                    document_path,
+                    entity.clone(),
+                ))
                 .into_any_element(),
             RenderBlock::Paragraph(text) => div()
                 .flex()
@@ -116,8 +128,34 @@ impl super::Emerald {
                 .text_color(rgb(text_color))
                 .text_lg()
                 .line_height(px(SOURCE_LINE_HEIGHT))
-                .children(Self::render_text_parts(text, prepared, entity.clone()))
+                .children(Self::render_text_parts(
+                    text,
+                    prepared,
+                    document_path,
+                    entity.clone(),
+                ))
                 .into_any_element(),
+            RenderBlock::Image { target, alt, width } => {
+                let path = document_path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(target);
+                let label = format!("Image unavailable: {alt} ({target})");
+                let image = gpui::img(path)
+                    .w_full()
+                    .max_w(px(width.unwrap_or(760) as f32))
+                    .with_fallback(move || {
+                        div()
+                            .text_color(rgb(muted_text))
+                            .child(label.clone())
+                            .into_any_element()
+                    });
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .child(image)
+                    .into_any_element()
+            }
             RenderBlock::UnorderedList(items) => div()
                 .flex()
                 .flex_col()
@@ -140,7 +178,12 @@ impl super::Emerald {
                                 .min_w(px(0.0))
                                 .whitespace_normal()
                                 .flex_wrap()
-                                .children(Self::render_text_parts(item, prepared, entity.clone())),
+                                .children(Self::render_text_parts(
+                                    item,
+                                    prepared,
+                                    document_path,
+                                    entity.clone(),
+                                )),
                         )
                 }))
                 .into_any_element(),
@@ -178,6 +221,7 @@ impl super::Emerald {
                                         .children(Self::render_text_parts(
                                             item,
                                             prepared,
+                                            document_path,
                                             entity.clone(),
                                         )),
                                 )
@@ -196,7 +240,12 @@ impl super::Emerald {
                 .border_color(rgb(accent))
                 .text_color(rgb(quote))
                 .line_height(px(SOURCE_LINE_HEIGHT))
-                .children(Self::render_text_parts(text, prepared, entity.clone()))
+                .children(Self::render_text_parts(
+                    text,
+                    prepared,
+                    document_path,
+                    entity.clone(),
+                ))
                 .into_any_element(),
             RenderBlock::ThematicBreak => div()
                 .w_full()
@@ -229,7 +278,14 @@ impl super::Emerald {
                             .child(kind.clone()),
                     )
                     .children(blocks.iter().enumerate().map(|(child_index, block)| {
-                        Self::render_block(child_index, block, style, prepared, entity.clone())
+                        Self::render_block(
+                            child_index,
+                            block,
+                            style,
+                            prepared,
+                            document_path,
+                            entity.clone(),
+                        )
                     }))
                     .into_any_element()
             }
@@ -363,7 +419,12 @@ impl super::Emerald {
                                 .border_color(rgb(border))
                                 .whitespace_normal()
                                 .text_color(rgb(text_color))
-                                .children(Self::render_text_parts(cell, prepared, entity.clone()))
+                                .children(Self::render_text_parts(
+                                    cell,
+                                    prepared,
+                                    document_path,
+                                    entity.clone(),
+                                ))
                         }))
                 }))
                 .into_any_element(),

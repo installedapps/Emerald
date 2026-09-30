@@ -22,6 +22,11 @@ pub enum RenderBlock {
         text: String,
     },
     Paragraph(String),
+    Image {
+        target: String,
+        alt: String,
+        width: Option<u32>,
+    },
     ThematicBreak,
     UnorderedList(Vec<String>),
     OrderedList(Vec<String>),
@@ -49,6 +54,7 @@ pub struct TocEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RenderBlockKind {
     Text,
+    Image,
     ThematicBreak,
     List,
     Quote,
@@ -68,6 +74,7 @@ impl RenderBlock {
         let (kind, wraps) = match self {
             Self::TableOfContents(_) => (RenderBlockKind::TableOfContents, true),
             Self::Heading { .. } | Self::Paragraph(_) => (RenderBlockKind::Text, true),
+            Self::Image { .. } => (RenderBlockKind::Image, false),
             Self::UnorderedList(_) | Self::OrderedList(_) => (RenderBlockKind::List, true),
             Self::ThematicBreak => (RenderBlockKind::ThematicBreak, false),
             Self::Quote(_) => (RenderBlockKind::Quote, true),
@@ -305,6 +312,7 @@ fn render_parsed_blocks(parsed_blocks: Vec<ParsedBlock>, include_toc: bool) -> V
         .map(|b| match b {
             ParsedBlock::Heading { level, text } => RenderBlock::Heading { level, text },
             ParsedBlock::Paragraph(t) => RenderBlock::Paragraph(t),
+            ParsedBlock::Image { target, alt, width } => RenderBlock::Image { target, alt, width },
             ParsedBlock::ThematicBreak => RenderBlock::ThematicBreak,
             ParsedBlock::UnorderedList(v) => RenderBlock::UnorderedList(v),
             ParsedBlock::OrderedList(v) => RenderBlock::OrderedList(v),
@@ -369,6 +377,28 @@ pub fn diagram_edges(source: &str) -> Vec<DiagramEdge> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renders_block_image_macros_with_alt_text_and_width() {
+        assert_eq!(
+            render_blocks("Before.\n\nimage::Test.jpg[Photo,640]\n\nAfter."),
+            vec![
+                RenderBlock::Paragraph("Before.".into()),
+                RenderBlock::Image {
+                    target: "Test.jpg".into(),
+                    alt: "Photo".into(),
+                    width: Some(640),
+                },
+                RenderBlock::Paragraph("After.".into()),
+            ]
+        );
+        assert_eq!(
+            render_blocks("An inline image: image:icon.png[Icon,24]."),
+            vec![RenderBlock::Paragraph(
+                "An inline image: image:icon.png[Icon,24].".into()
+            )]
+        );
+    }
 
     #[test]
     fn renders_inline_and_block_admonitions_with_their_contents() {

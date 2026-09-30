@@ -56,7 +56,7 @@ impl super::Emerald {
         {
             self.document_list_state.reset(rows.len());
             self.document_list_count = rows.len();
-            self.document_list_file = Some(active_path);
+            self.document_list_file = Some(active_path.clone());
         }
         if self
             .document_list_blocks
@@ -202,6 +202,7 @@ impl super::Emerald {
                                         } else {
                                             let list_state = self.document_list_state.clone();
                                             let entity = cx.entity();
+                                            let document_path = active_path.clone();
                                             list(list_state, move |index, _, _| {
                                                 Self::render_preview_row(
                                                     index,
@@ -209,6 +210,7 @@ impl super::Emerald {
                                                     &blocks,
                                                     style,
                                                     &prepared,
+                                                    &document_path,
                                                     entity.clone(),
                                                 )
                                             })

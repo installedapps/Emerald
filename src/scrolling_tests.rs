@@ -45,6 +45,7 @@ impl PreviewFixture {
                     &blocks,
                     RenderStyle::default(),
                     &prepared,
+                    std::path::Path::new("note.adoc"),
                     entity.clone(),
                 )
             })
@@ -52,7 +53,7 @@ impl PreviewFixture {
             .w_full()
             .h_full()
             .into_any_element();
-            cx.new(|_| DrawPreview(Some(element)))
+            cx.new(|_| DrawPreview(Some(element))).into_any_element()
         });
         let count = *work.borrow();
         count
@@ -184,7 +185,7 @@ fn source_scroll_reuses_the_index_and_keeps_only_visible_hit_targets(cx: &mut Te
             size(px(600.), px(300.)),
             |window, cx| {
                 let element = entity.update(cx, |view, cx| view.render_source(cx.entity(), window));
-                cx.new(|_| DrawPreview(Some(element)))
+                cx.new(|_| DrawPreview(Some(element))).into_any_element()
             },
         );
         entity.read_with(cx, |view, _| {
@@ -259,7 +260,7 @@ fn source_layout_cache_survives_selection_but_not_edits_resize_or_file_switch(
             size(px(width), px(300.)),
             |window, cx| {
                 let element = entity.update(cx, |view, cx| view.render_source(cx.entity(), window));
-                cx.new(|_| DrawPreview(Some(element)))
+                cx.new(|_| DrawPreview(Some(element))).into_any_element()
             },
         );
         entity.read_with(cx, |view, _| {

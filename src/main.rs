@@ -1,12 +1,14 @@
 mod app;
 
 use app::Emerald;
-use gpui::{prelude::*, px, size, Application, Bounds, Focusable, WindowBounds, WindowOptions};
+use gpui::{prelude::*, px, size, Bounds, Focusable, WindowBounds, WindowOptions};
 
 fn main() {
     emerald::logging::init();
     tracing::info!("starting Emerald");
-    Application::new().run(|cx| {
+    let app = gpui_platform::application().with_assets(gpui_kit_assets::Assets);
+    app.run(|cx| {
+        gpui_kit::init(cx);
         let window = cx
             .open_window(
                 WindowOptions {
@@ -27,7 +29,7 @@ fn main() {
 
         window
             .update(cx, |view, window, cx| {
-                window.focus(&view.focus_handle(cx));
+                window.focus(&view.focus_handle(cx), cx);
                 cx.activate(true);
             })
             .unwrap_or_else(|error| {

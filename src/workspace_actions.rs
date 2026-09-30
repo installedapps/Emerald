@@ -25,7 +25,7 @@ impl super::Emerald {
             offset_in_item: px(0.0),
         });
         self.start_file_load(path, cx);
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.activate(true);
     }
 
@@ -122,7 +122,7 @@ impl super::Emerald {
         };
         self.interaction.graph_mode = false;
         self.start_file_load(path, cx);
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.activate(true);
     }
 
@@ -150,7 +150,7 @@ impl super::Emerald {
         });
         self.interaction.context_menu = None;
         self.interaction.source_revealed = NoteSwitchIntent::ExistingFile.reveals_source();
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.activate(true);
         self.blink_cursor.show();
         cx.notify();
@@ -215,7 +215,7 @@ impl super::Emerald {
     ) {
         if let Err(error) = self.state.create_file("untitled") {
             self.show_operation_error(error, cx);
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             return;
         }
         self.interaction.file_load_error = None;
@@ -228,7 +228,7 @@ impl super::Emerald {
         if self.interaction.source_revealed {
             self.reveal_source(cx);
         }
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.activate(true);
         self.blink_cursor.show();
         cx.notify();
@@ -242,11 +242,11 @@ impl super::Emerald {
     ) {
         if let Err(error) = self.state.save() {
             self.show_operation_error(error, cx);
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             return;
         }
         self.interaction.file_load_error = None;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.activate(true);
         self.blink_cursor.show();
         cx.notify();
@@ -264,7 +264,7 @@ impl super::Emerald {
             multiple: false,
             prompt: Some("Open AsciiDoc file".into()),
         });
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.activate(true);
 
         cx.spawn(async move |view, cx| {
@@ -364,7 +364,7 @@ impl super::Emerald {
         self.interaction.renaming = true;
         self.interaction.context_menu = None;
         self.blink_cursor.show();
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 }

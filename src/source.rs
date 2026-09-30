@@ -65,9 +65,14 @@ impl super::Emerald {
                             let end = f32::from(shaped.width);
                             highlight(end, end + 8.0, window);
                         }
-                        if let Err(error) =
-                            shaped.paint(bounds.origin, px(SOURCE_LINE_HEIGHT), window, cx)
-                        {
+                        if let Err(error) = shaped.paint(
+                            bounds.origin,
+                            px(SOURCE_LINE_HEIGHT),
+                            gpui::TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        ) {
                             tracing::warn!(%error, "could not paint source line");
                         }
                         if let Some(cursor) = cursor.filter(|_| cursor_visible) {
@@ -257,12 +262,25 @@ impl super::Emerald {
     pub(super) fn render_text_parts(
         text: &str,
         prepared: &PreparedPreview,
+        document_path: &std::path::Path,
         entity: gpui::Entity<Emerald>,
     ) -> Vec<AnyElement> {
         prepared
             .inline(text)
             .iter()
             .map(|part| {
+                if let Some(image) = &part.image {
+                    let path = document_path
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .join(image.target.as_ref());
+                    let label = format!("Image unavailable: {}", part.text);
+                    return gpui::img(path)
+                        .w(px(image.width.unwrap_or(24) as f32))
+                        .max_w_full()
+                        .with_fallback(move || div().child(label.clone()).into_any_element())
+                        .into_any_element();
+                }
                 let element = div()
                     .min_w(px(0.0))
                     .max_w_full()
