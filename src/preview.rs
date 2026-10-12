@@ -299,6 +299,12 @@ fn language_for(name: &str) -> Option<Language> {
     match name.to_ascii_lowercase().as_str() {
         "rust" | "rs" => Some(tree_sitter_rust::LANGUAGE.into()),
         "json" => Some(tree_sitter_json::LANGUAGE.into()),
+        "nix" => Some(tree_sitter_nix::LANGUAGE.into()),
+        "javascript" | "js" | "jsx" | "ecmascript" => Some(tree_sitter_javascript::LANGUAGE.into()),
+        "c" | "h" => Some(tree_sitter_c::LANGUAGE.into()),
+        "java" => Some(tree_sitter_java::LANGUAGE.into()),
+        "python" | "py" => Some(tree_sitter_python::LANGUAGE.into()),
+        "c#" | "csharp" | "c-sharp" | "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
         _ => None,
     }
 }
@@ -326,16 +332,33 @@ fn collect_code_leaves(
     }
 
     let child_kind = match node.kind() {
-        "string_literal" | "raw_string_literal" | "char_literal" | "string" => {
-            CodeTokenKind::String
-        }
+        "string_literal" | "raw_string_literal" | "char_literal" | "string" | "string_content"
+        | "string_fragment" | "quoted_string" => CodeTokenKind::String,
         "line_comment" | "block_comment" | "comment" => CodeTokenKind::Comment,
-        "integer_literal" | "float_literal" | "number" => CodeTokenKind::Number,
+        "integer_literal"
+        | "float_literal"
+        | "number"
+        | "number_literal"
+        | "integer_expression"
+        | "float_expression"
+        | "integer"
+        | "float"
+        | "decimal_integer_literal"
+        | "hex_integer_literal"
+        | "binary_integer_literal"
+        | "decimal_floating_point_literal"
+        | "hex_floating_point_literal" => CodeTokenKind::Number,
         _ => inherited,
     };
-    let function = (node.kind() == "call_expression")
-        .then(|| node.child_by_field_name("function"))
-        .flatten();
+    let function = matches!(
+        node.kind(),
+        "call" | "call_expression" | "method_invocation"
+    )
+    .then(|| {
+        node.child_by_field_name("function")
+            .or_else(|| node.child_by_field_name("name"))
+    })
+    .flatten();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_code_leaves(
@@ -359,20 +382,37 @@ impl ParseCodeTokenKind for str {
     fn parse_kind(&self) -> Option<CodeTokenKind> {
         match self {
             "line_comment" | "block_comment" | "comment" => Some(CodeTokenKind::Comment),
-            "string_literal" | "raw_string_literal" | "char_literal" | "string" => {
-                Some(CodeTokenKind::String)
+            "string_literal" | "raw_string_literal" | "char_literal" | "string"
+            | "string_content" | "string_fragment" | "quoted_string" => Some(CodeTokenKind::String),
+            "integer_literal"
+            | "float_literal"
+            | "number"
+            | "number_literal"
+            | "integer_expression"
+            | "float_expression"
+            | "integer"
+            | "float"
+            | "decimal_integer_literal"
+            | "hex_integer_literal"
+            | "binary_integer_literal"
+            | "decimal_floating_point_literal"
+            | "hex_floating_point_literal" => Some(CodeTokenKind::Number),
+            "type_identifier" | "primitive_type" | "predefined_type" => Some(CodeTokenKind::Type),
+            "field_identifier" | "property_identifier" => Some(CodeTokenKind::Property),
+            "true" | "false" | "null" | "boolean_literal" | "none" | "None" => {
+                Some(CodeTokenKind::Constant)
             }
-            "integer_literal" | "float_literal" | "number" => Some(CodeTokenKind::Number),
-            "type_identifier" | "primitive_type" => Some(CodeTokenKind::Type),
-            "field_identifier" => Some(CodeTokenKind::Property),
-            "true" | "false" | "null" | "boolean_literal" => Some(CodeTokenKind::Constant),
-            "as" | "async" | "await" | "break" | "const" | "continue" | "crate" | "dyn"
-            | "default" | "else" | "enum" | "extern" | "fn" | "for" | "gen" | "if" | "impl"
-            | "in" | "let" | "loop" | "match" | "mod" | "move" | "mut" | "pub" | "ref"
-            | "return" | "self" | "Self" | "static" | "struct" | "super" | "trait" | "type"
-            | "union" | "unsafe" | "use" | "where" | "while" | "yield" => {
-                Some(CodeTokenKind::Keyword)
-            }
+            "as" | "async" | "await" | "break" | "case" | "catch" | "class" | "const"
+            | "continue" | "crate" | "def" | "default" | "del" | "do" | "dyn" | "elif" | "else"
+            | "enum" | "except" | "export" | "extends" | "extern" | "finally" | "for" | "from"
+            | "func" | "fn" | "foreach" | "gen" | "global" | "goto" | "if" | "implements"
+            | "import" | "in" | "instanceof" | "interface" | "is" | "lambda" | "let" | "loop"
+            | "match" | "mod" | "module" | "move" | "mut" | "namespace" | "new" | "nonlocal"
+            | "not" | "or" | "package" | "pass" | "private" | "protected" | "pub" | "public"
+            | "raise" | "ref" | "return" | "self" | "Self" | "static" | "struct" | "super"
+            | "switch" | "synchronized" | "this" | "throw" | "trait" | "try" | "type"
+            | "typeof" | "union" | "unsafe" | "use" | "var" | "virtual" | "where" | "while"
+            | "with" | "yield" => Some(CodeTokenKind::Keyword),
             _ => None,
         }
     }
@@ -381,10 +421,17 @@ impl ParseCodeTokenKind for str {
 fn classify_leaf(node: Node<'_>, source: &str) -> Option<CodeTokenKind> {
     let parent = node.parent()?;
     if node.kind() == "identifier" {
-        if parent.kind() == "function_item"
-            && parent
-                .child_by_field_name("name")
-                .is_some_and(|name| name.id() == node.id())
+        if matches!(
+            parent.kind(),
+            "function_item"
+                | "function_declaration"
+                | "function_definition"
+                | "method_declaration"
+                | "method_definition"
+                | "constructor_declaration"
+        ) && parent
+            .child_by_field_name("name")
+            .is_some_and(|name| name.id() == node.id())
         {
             return Some(CodeTokenKind::Function);
         }
@@ -465,6 +512,60 @@ fn extract_inline_images(text: &str) -> Vec<InlineImageMatch> {
         offset = close + 1;
     }
     images
+}
+
+#[cfg(test)]
+mod code_highlighting_tests {
+    use super::{CodeTokenKind, PreparedPreview};
+    use crate::rendered::RenderBlock;
+
+    #[test]
+    fn highlights_requested_programming_languages() {
+        let examples = [
+            (
+                "nix",
+                "# comment\nlet count = 42; in \"hello\"",
+            ),
+            (
+                "javascript",
+                "// comment\nfunction greet() { const count = 42; return \"hello\"; }",
+            ),
+            (
+                "c",
+                "// comment\nint main() { int count = 42; return \"hello\"; }",
+            ),
+            (
+                "java",
+                "// comment\nclass Example { String greet() { int count = 42; return \"hello\"; } }",
+            ),
+            (
+                "python",
+                "# comment\ndef greet():\n    count = 42\n    return \"hello\"",
+            ),
+            (
+                "csharp",
+                "// comment\nclass Example { string Greet() { int count = 42; return \"hello\"; } }",
+            ),
+        ];
+
+        for (language, source) in examples {
+            let blocks = [RenderBlock::Code {
+                language: Some(language.to_owned()),
+                code: source.to_owned(),
+            }];
+            let prepared = PreparedPreview::new(&blocks);
+            let kinds = prepared
+                .code_tokens(Some(language), source)
+                .iter()
+                .map(|token| token.kind)
+                .collect::<Vec<_>>();
+
+            assert!(kinds.contains(&CodeTokenKind::Keyword), "{language}");
+            assert!(kinds.contains(&CodeTokenKind::String), "{language}");
+            assert!(kinds.contains(&CodeTokenKind::Comment), "{language}");
+            assert!(kinds.contains(&CodeTokenKind::Number), "{language}");
+        }
+    }
 }
 
 #[cfg(test)]
