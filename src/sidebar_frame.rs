@@ -29,6 +29,7 @@ impl super::Emerald {
             .relative()
             .overflow_hidden()
             .min_w(px(0.0))
+            .flex_shrink_0()
             .with_spring(
                 if links {
                     "links-sidebar-width"

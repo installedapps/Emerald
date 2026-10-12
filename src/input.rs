@@ -28,7 +28,49 @@ fn edit_rename_buffer(buffer: &mut String, keystroke: &Keystroke) {
 mod tests;
 
 impl super::Emerald {
-    pub(crate) fn handle_keystroke(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
+    pub(crate) fn handle_keystroke(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if keystroke.key == "p"
+            && keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && !keystroke.modifiers.function
+            && !self.interaction.renaming
+        {
+            if self.interaction.palette.is_some() {
+                if self.interaction.palette_closing {
+                    self.interaction.palette_closing = false;
+                    self.interaction.palette_revision =
+                        self.interaction.palette_revision.wrapping_add(1);
+                    cx.notify();
+                } else {
+                    self.dismiss_palette(cx);
+                }
+            } else {
+                self.interaction.palette = Some(super::palette::CommandPalette {
+                    query: String::new(),
+                    selected: 0,
+                    mode: super::palette::PaletteMode::Commands,
+                });
+                self.interaction.palette_closing = false;
+                self.interaction.palette_revision =
+                    self.interaction.palette_revision.wrapping_add(1);
+                cx.notify();
+            }
+            self.interaction.context_menu = None;
+            return;
+        }
+        if self.interaction.palette.is_some() {
+            if self.interaction.palette_closing {
+                return;
+            }
+            self.handle_palette_keystroke(keystroke, window, cx);
+            return;
+        }
         if self.interaction.graph_mode {
             self.interaction.context_menu = None;
             return;
@@ -119,6 +161,78 @@ impl super::Emerald {
         cx.notify();
     }
 
+    fn handle_palette_keystroke(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(palette) = self.interaction.palette.as_mut() else {
+            return;
+        };
+        match keystroke.key.as_str() {
+            "escape" => self.dismiss_palette(cx),
+            "up" => palette.selected = palette.selected.saturating_sub(1),
+            "down" => {
+                let count = match palette.mode {
+                    super::palette::PaletteMode::Commands => palette.command_count(),
+                    super::palette::PaletteMode::Themes => emerald::theme::ThemeId::ALL
+                        .into_iter()
+                        .filter(|id| {
+                            palette.query.is_empty()
+                                || id
+                                    .name()
+                                    .to_lowercase()
+                                    .contains(&palette.query.to_lowercase())
+                        })
+                        .count(),
+                };
+                palette.selected = palette
+                    .selected
+                    .saturating_add(1)
+                    .min(count.saturating_sub(1));
+            }
+            "enter" | "tab" => match palette.mode {
+                super::palette::PaletteMode::Commands => {
+                    let selected = palette.selected;
+                    self.run_palette_command(selected, window, cx);
+                    return;
+                }
+                super::palette::PaletteMode::Themes => {
+                    let selected = emerald::theme::ThemeId::ALL
+                        .into_iter()
+                        .filter(|id| {
+                            palette.query.is_empty()
+                                || id
+                                    .name()
+                                    .to_lowercase()
+                                    .contains(&palette.query.to_lowercase())
+                        })
+                        .nth(palette.selected);
+                    if let Some(id) = selected {
+                        self.choose_palette_theme(id, cx);
+                    }
+                }
+            },
+            "backspace" => {
+                palette.query.pop();
+                palette.selected = 0;
+            }
+            _ if !keystroke.modifiers.control
+                && !keystroke.modifiers.alt
+                && !keystroke.modifiers.platform
+                && !keystroke.modifiers.function =>
+            {
+                if let Some(character) = &keystroke.key_char {
+                    palette.query.push_str(character);
+                    palette.selected = 0;
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
     pub(super) fn byte_offset_for_document_position(
         &self,
         pointer_x: f32,
@@ -157,6 +271,9 @@ impl super::Emerald {
         } else {
             // Resolve the anchor only after the newly revealed source has been laid out.
             self.interaction.pending_source_click = Some((pointer, event.modifiers.shift));
+            if self.interaction.editor_view_mode == super::EditorViewMode::Preview {
+                self.interaction.editor_view_mode = super::EditorViewMode::Automatic;
+            }
             self.interaction.source_revealed = true;
         }
         self.blink_cursor.show();

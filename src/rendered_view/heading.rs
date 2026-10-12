@@ -8,7 +8,6 @@ pub(super) fn render(block: &RenderBlock, cx: &RenderContext<'_>) -> AnyElement 
     let prepared = cx.prepared;
     let document_path = cx.document_path;
     let entity = cx.entity.clone();
-    let text_color = cx.text_color;
     let heading = cx.heading;
     div()
         .flex()

@@ -1,0 +1,82 @@
+= Emerald
+:toc:
+:sectnums:
+
+Emerald is a native desktop AsciiDoc editor written in Rust with GPUI. It combines a keyboard-driven source editor, a rendered document preview, and workspace navigation for linked notes.
+
+== Features
+
+=== Editing and preview
+
+* UTF-8 aware text editing with cursor movement, selection, and two-space indentation.
+* AsciiDoc preview for headings, paragraphs, lists, quotes, admonitions, tables, links, images, and source blocks.
+* Paragraph breaks and code whitespace are preserved in the rendered view.
+* Fold and unfold headings from the command palette.
+* Slash commands insert common AsciiDoc structures such as tables, code blocks, callouts, math, embeds, attachments, and properties.
+
+=== Workspace navigation
+
+* Create, open, save, rename, and delete `.adoc` notes in the workspace.
+* Browse backlinks, outgoing links, and unlinked mentions in the right sidebar.
+* Explore note relationships in the graph view.
+* Add comma-separated tags with an AsciiDoc `:tags:` header. Tags appear as themed chips beneath the first heading and can be browsed in the right sidebar.
+
+[source,asciidoc]
+----
+:tags: rust, writing, research
+----
+
+=== Code, spelling, and themes
+
+* Tree-sitter syntax highlighting for Rust and JSON code blocks, with colors that follow the active Emerald theme.
+* Spell checking in the source editor. Emerald uses a dictionary matching the system locale when available, then falls back to the bundled English dictionary. Right-click an underlined word to see spelling suggestions.
+* Five built-in dark themes: Everforest, Tokyo Night, Gruvbox Dark, Dracula, and Poimandres. Theme selection is saved between launches.
+* Both sidebars use subtle transparency while retaining opaque text and controls.
+
+== Command palette
+
+Press `Ctrl+P` to open the centered command palette. Type to filter commands, use the up and down arrows to move through results, and press `Enter` or `Tab` to run a command. Press `Esc` to close it.
+
+Available commands include:
+
+* `Fold headings` and `Unfold headings` for the preview.
+* `Create new note`; typing `new note <name>` creates a named note.
+* `Change theme` to open the theme picker.
+* `Add tag`; typing `add tag <name>` adds a tag to the active note.
+
+== Getting started
+
+Install a Rust toolchain and the native build dependencies required by GPUI for your platform. From the repository root, build and launch Emerald:
+
+[source,shell]
+----
+cargo build
+cargo run
+----
+
+Emerald uses the `notes/` directory beneath the current working directory as its workspace. It creates the directory and a `welcome.adoc` note when needed. Workspace documents are ignored by Git.
+
+== Development
+
+Run the unit tests and check formatting before submitting changes:
+
+[source,shell]
+----
+cargo test
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+----
+
+Tests live beside the implementation in `src/`. Cargo build output in `target/` is ignored by Git.
+
+== Project structure
+
+* `src/main.rs` starts the application; `src/app.rs` coordinates the GPUI view.
+* `src/lib.rs`, `src/document.rs`, and `src/session.rs` manage editor and document state.
+* `src/parser.rs`, `src/rendered.rs`, `src/preview.rs`, and `src/rendered_view/` handle parsing and preview rendering, including prepared Tree-sitter code tokens.
+* `src/workspace.rs`, `src/index.rs`, and `src/workspace_actions.rs` manage workspace files, note relationships, and workspace actions.
+* `src/theme.rs` defines the color themes; `src/palette.rs` and `src/slash_menu.rs` provide command and insertion palettes.
+* `src/source.rs` and `src/spellcheck.rs` render and check source text.
+* `Cargo.toml` and `Cargo.lock` define the package and dependency versions.
+
+See link:AGENTS.md[AGENTS.md] for repository contribution guidelines.

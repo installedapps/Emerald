@@ -20,6 +20,14 @@ pub struct EmeraldTheme {
     pub destructive: u32,
     pub code_background: u32,
     pub graph_background: u32,
+    pub code_keyword: u32,
+    pub code_string: u32,
+    pub code_comment: u32,
+    pub code_number: u32,
+    pub code_function: u32,
+    pub code_type: u32,
+    pub code_constant: u32,
+    pub code_property: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -28,14 +36,16 @@ pub enum ThemeId {
     TokyoNight,
     Gruvbox,
     Dracula,
+    Poimandres,
 }
 
 impl ThemeId {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Everforest,
         Self::TokyoNight,
         Self::Gruvbox,
         Self::Dracula,
+        Self::Poimandres,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -48,6 +58,7 @@ impl ThemeId {
             Self::TokyoNight => TOKYO_NIGHT,
             Self::Gruvbox => GRUVBOX,
             Self::Dracula => DRACULA,
+            Self::Poimandres => POIMANDRES,
         }
     }
 
@@ -57,6 +68,7 @@ impl ThemeId {
             Self::TokyoNight => "tokyo-night",
             Self::Gruvbox => "gruvbox",
             Self::Dracula => "dracula",
+            Self::Poimandres => "poimandres",
         }
     }
 
@@ -84,6 +96,14 @@ pub const EVERFOREST_DARK: EmeraldTheme = EmeraldTheme {
     destructive: 0xe67e80,
     code_background: 0x202b30,
     graph_background: 0x1b262a,
+    code_keyword: 0x8fbf9f,
+    code_string: 0xd699b3,
+    code_comment: 0x9aa79f,
+    code_number: 0xe69875,
+    code_function: 0x83c092,
+    code_type: 0xdfaf68,
+    code_constant: 0xd699b3,
+    code_property: 0xa7c080,
 };
 
 pub const TOKYO_NIGHT: EmeraldTheme = EmeraldTheme {
@@ -105,6 +125,14 @@ pub const TOKYO_NIGHT: EmeraldTheme = EmeraldTheme {
     destructive: 0xf7768e,
     code_background: 0x16161e,
     graph_background: 0x171821,
+    code_keyword: 0xbb9af7,
+    code_string: 0x9ece6a,
+    code_comment: 0x8b93b4,
+    code_number: 0xff9e64,
+    code_function: 0x7dcfff,
+    code_type: 0x2ac3de,
+    code_constant: 0xff9e64,
+    code_property: 0xc0caf5,
 };
 
 pub const GRUVBOX: EmeraldTheme = EmeraldTheme {
@@ -126,6 +154,14 @@ pub const GRUVBOX: EmeraldTheme = EmeraldTheme {
     destructive: 0xfb4934,
     code_background: 0x1d2021,
     graph_background: 0x222222,
+    code_keyword: 0xfb4934,
+    code_string: 0xb8bb26,
+    code_comment: 0xa89984,
+    code_number: 0xd3869b,
+    code_function: 0x8ec07c,
+    code_type: 0xfabd2f,
+    code_constant: 0xfe8019,
+    code_property: 0x83a598,
 };
 
 pub const DRACULA: EmeraldTheme = EmeraldTheme {
@@ -147,6 +183,43 @@ pub const DRACULA: EmeraldTheme = EmeraldTheme {
     destructive: 0xff5555,
     code_background: 0x21222c,
     graph_background: 0x242530,
+    code_keyword: 0xff79c6,
+    code_string: 0xf1fa8c,
+    code_comment: 0xa3a5b2,
+    code_number: 0xbd93f9,
+    code_function: 0x8be9fd,
+    code_type: 0x50fa7b,
+    code_constant: 0xffb86c,
+    code_property: 0xf8f8f2,
+};
+
+pub const POIMANDRES: EmeraldTheme = EmeraldTheme {
+    id: ThemeId::Poimandres,
+    name: "Poimandres",
+    window_background: 0x1b1e28,
+    sidebar: 0x171922,
+    panel: 0x222532,
+    menu: 0x202330,
+    panel_border: 0x41465b,
+    text: 0xa6accd,
+    muted_text: 0x858bab,
+    faint_text: 0x727999,
+    accent: 0x5de4c7,
+    selection: 0x303340,
+    hover: 0x282b38,
+    active_file: 0x33404b,
+    active_file_text: 0xa6accd,
+    destructive: 0xd0679d,
+    code_background: 0x171922,
+    graph_background: 0x1b1e28,
+    code_keyword: 0xd0679d,
+    code_string: 0x5de4c7,
+    code_comment: 0x858bab,
+    code_number: 0xfffac2,
+    code_function: 0xadd7ff,
+    code_type: 0x89ddff,
+    code_constant: 0xfffac2,
+    code_property: 0xa6accd,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -156,8 +156,32 @@ impl super::Emerald {
         cx.notify();
     }
 
+    pub(super) fn open_tagged_note(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if path == self.state.active_file() {
+            return;
+        }
+        self.start_file_load(path, cx);
+        self.source_list_state.scroll_to(ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.0),
+        });
+        self.interaction.context_menu = None;
+        self.interaction.source_revealed = false;
+        window.focus(&self.focus_handle, cx);
+        cx.activate(true);
+        self.blink_cursor.show();
+        cx.notify();
+    }
+
     fn start_file_load(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.interaction.context_menu = None;
+        self.interaction.editor_view_mode = EditorViewMode::Automatic;
+        self.interaction.source_revealed = false;
         let workspace = self.state.workspace_root().to_path_buf();
         let current_file = self.state.active_file().to_path_buf();
         let current_text = self.state.text().to_string();
@@ -228,6 +252,7 @@ impl super::Emerald {
         });
         self.interaction.context_menu = None;
         self.interaction.source_revealed = NoteSwitchIntent::NewFile.reveals_source();
+        self.note_changed("New note created", cx);
         if self.interaction.source_revealed {
             self.reveal_source(cx);
         }
@@ -343,6 +368,7 @@ impl super::Emerald {
                     offset_in_item: px(0.0),
                 });
                 view.interaction.source_revealed = true;
+                view.note_changed("Note deleted", cx);
                 view.schedule_parse_refresh(cx);
                 view.blink_cursor.show();
                 cx.notify();
@@ -350,6 +376,26 @@ impl super::Emerald {
             if let Err(error) = result {
                 tracing::error!(error = %error, "failed to update Emerald while deleting a file");
             }
+        })
+        .detach();
+    }
+
+    pub(super) fn note_changed(&mut self, message: &str, cx: &mut Context<Self>) {
+        self.interaction.note_transition_revision =
+            self.interaction.note_transition_revision.wrapping_add(1);
+        self.interaction.toast = Some(message.to_owned());
+        self.interaction.toast_revision = self.interaction.toast_revision.wrapping_add(1);
+        let revision = self.interaction.toast_revision;
+        cx.spawn(async move |view, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(2200))
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                if view.interaction.toast_revision == revision {
+                    view.interaction.toast = None;
+                    cx.notify();
+                }
+            });
         })
         .detach();
     }

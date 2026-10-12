@@ -18,6 +18,7 @@ pub(super) fn render(block: &RenderBlock, cx: &RenderContext<'_>) -> AnyElement 
         .text_color(rgb(text_color))
         .text_lg()
         .line_height(px(SOURCE_LINE_HEIGHT))
+        .pb_6()
         .children(Emerald::render_text_parts(
             text,
             prepared,

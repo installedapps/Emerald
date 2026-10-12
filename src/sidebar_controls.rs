@@ -1,3 +1,4 @@
+use super::sidebar::{sidebar_icon, SidebarIcon};
 use super::*;
 
 impl super::Emerald {
@@ -12,7 +13,6 @@ impl super::Emerald {
         } else {
             self.interaction.sidebar_visible
         };
-        let icon = themed_sidebar_icon(theme);
         let glow: gpui::Hsla = rgb(theme.accent).into();
         let button = div()
             .id(if links {
@@ -21,16 +21,28 @@ impl super::Emerald {
                 "toggle-sidebar"
             })
             .role(gpui::Role::Button)
-            .aria_label(if links {
-                "Toggle linked notes sidebar"
+            .aria_label(if links && visible {
+                "Hide linked notes sidebar"
+            } else if links {
+                "Show linked notes sidebar"
+            } else if visible {
+                "Hide notes sidebar"
             } else {
-                "Toggle notes sidebar"
+                "Show notes sidebar"
             })
             .tab_stop(true)
             .cursor_pointer()
-            .p_1()
-            .rounded_sm()
-            .hover(|b| b.bg(rgb(theme.hover)))
+            .focus_visible(|button| button.bg(rgb(theme.hover)).text_color(rgb(theme.text)))
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .text_sm()
+            .text_color(rgb(if visible {
+                theme.accent
+            } else {
+                theme.muted_text
+            }))
+            .hover(|button| button.bg(rgb(theme.hover)).text_color(rgb(theme.text)))
             .when(visible, |b| {
                 b.shadow(vec![gpui::BoxShadow::new(
                     px(0.0),
@@ -39,7 +51,12 @@ impl super::Emerald {
                 )
                 .blur_radius(px(10.0))])
             })
-            .child(gpui::svg().data(icon.as_bytes()).size(px(20.0)));
+            .child(sidebar_icon(
+                SidebarIcon::NotesPanel { links, visible },
+                theme,
+                visible,
+                16.0,
+            ));
         if links {
             button.on_click(cx.listener(Self::toggle_links_sidebar))
         } else {
@@ -66,9 +83,4 @@ impl super::Emerald {
         self.interaction.links_sidebar_visible = !self.interaction.links_sidebar_visible;
         cx.notify();
     }
-}
-
-pub(super) fn themed_sidebar_icon(theme: emerald::theme::EmeraldTheme) -> String {
-    include_str!("../assets/bar-left-svgrepo-com.svg")
-        .replace("#000000", &format!("#{:06x}", theme.accent))
 }

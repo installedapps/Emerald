@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 
 use crate::document::DocumentEditor;
 use crate::graph::{self, LinkGraph};
+use crate::index::WorkspaceIndex;
 use crate::parser::{ParseReport, ParsedDocument};
 use crate::workspace::Workspace;
 
@@ -17,7 +18,7 @@ pub struct WorkspaceSession {
     active_file: PathBuf,
     files: Vec<PathBuf>,
     document: DocumentEditor,
-    graph_cache: Option<(u64, LinkGraph)>,
+    index_cache: Option<(u64, WorkspaceIndex)>,
 }
 
 impl WorkspaceSession {
@@ -34,7 +35,7 @@ impl WorkspaceSession {
             active_file,
             files: Vec::new(),
             document,
-            graph_cache: None,
+            index_cache: None,
         })
     }
 
@@ -53,7 +54,7 @@ impl WorkspaceSession {
             active_file,
             files,
             document,
-            graph_cache: None,
+            index_cache: None,
         })
     }
 
@@ -218,26 +219,30 @@ impl WorkspaceSession {
     }
 
     pub fn link_graph(&mut self) -> &LinkGraph {
+        self.workspace_index().graph()
+    }
+
+    pub fn workspace_index(&mut self) -> &WorkspaceIndex {
         let revision = self.text_revision();
         if self
-            .graph_cache
+            .index_cache
             .as_ref()
             .is_none_or(|(cached, _)| *cached != revision)
         {
-            let graph = LinkGraph::build(
+            let index = WorkspaceIndex::build(
                 self.workspace.root(),
                 &self.files,
                 Some((&self.active_file, self.text())),
             );
             tracing::debug!(
-                nodes = graph.nodes.len(),
-                edges = graph.edges.len(),
-                errors = graph.errors.len(),
-                "rebuilt link graph"
+                notes = self.files.len(),
+                links = index.links().len(),
+                errors = index.graph().errors.len(),
+                "rebuilt workspace index"
             );
-            self.graph_cache = Some((revision, graph));
+            self.index_cache = Some((revision, index));
         }
-        &self.graph_cache.as_ref().expect("graph cache populated").1
+        &self.index_cache.as_ref().expect("index cache populated").1
     }
 
     pub fn ensure_linked_file(&mut self, path: impl AsRef<Path>) -> Result<PathBuf> {
@@ -308,6 +313,6 @@ impl WorkspaceSession {
     }
 
     fn invalidate_graph(&mut self) {
-        self.graph_cache = None;
+        self.index_cache = None;
     }
 }

@@ -66,3 +66,79 @@ fn parses_notes_with_cross_references() {
         ParsedBlock::Paragraph("Go to xref:test-2.adoc[Test 2].".into())
     );
 }
+
+#[test]
+fn parses_asciidoc_and_markdown_thematic_breaks() {
+    for marker in ["'''", "---", "***", "- - -", "* * *"] {
+        let document = ParsedDocument::from_source(&format!("Before.\n\n{marker}\n\nAfter."));
+
+        assert!(document.report.parsed, "{marker}");
+        assert_eq!(
+            document.blocks,
+            vec![
+                ParsedBlock::Paragraph("Before.".into()),
+                ParsedBlock::ThematicBreak,
+                ParsedBlock::Paragraph("After.".into()),
+            ],
+            "{marker}"
+        );
+    }
+}
+
+#[test]
+fn does_not_parse_spaced_apostrophes_or_long_markers_as_thematic_breaks() {
+    let document = ParsedDocument::from_source("Before.\n\n' ' '\n\nAfter.");
+    assert!(document.report.parsed);
+    assert_eq!(
+        document.blocks,
+        vec![
+            ParsedBlock::Paragraph("Before.".into()),
+            ParsedBlock::Paragraph("' ' '".into()),
+            ParsedBlock::Paragraph("After.".into()),
+        ]
+    );
+
+    for marker in ["----", "****"] {
+        let document = ParsedDocument::from_source(&format!("Before.\n\n{marker}\n\nAfter."));
+
+        assert!(document.report.parsed, "{marker}");
+        assert!(
+            !document.blocks.contains(&ParsedBlock::ThematicBreak),
+            "{marker}"
+        );
+    }
+}
+
+#[test]
+fn thematic_break_requires_a_blank_line_after_a_paragraph() {
+    let document = ParsedDocument::from_source("Before.\n'''\nAfter.");
+
+    assert!(document.report.parsed);
+    assert_eq!(
+        document.blocks,
+        vec![ParsedBlock::Paragraph("Before. ''' After.".into())]
+    );
+}
+
+#[test]
+fn fallback_parser_preserves_supported_thematic_breaks() {
+    for marker in ["'''", "---", "***", "- - -", "* * *"] {
+        assert_eq!(
+            fallback_blocks(&format!("Before.\n\n{marker}\n\nAfter.")),
+            vec![
+                ParsedBlock::Paragraph("Before.".into()),
+                ParsedBlock::ThematicBreak,
+                ParsedBlock::Paragraph("After.".into()),
+            ],
+            "{marker}"
+        );
+    }
+    assert_eq!(
+        fallback_blocks("Before.\n\n' ' '\n\nAfter."),
+        vec![
+            ParsedBlock::Paragraph("Before.".into()),
+            ParsedBlock::Paragraph("' ' '".into()),
+            ParsedBlock::Paragraph("After.".into()),
+        ]
+    );
+}

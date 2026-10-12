@@ -3,7 +3,7 @@ use crate::Selection;
 
 pub const SOURCE_LINE_HEIGHT: f32 = 28.0;
 /// Source rendering measures this font's actual glyph positions for hit testing.
-pub const SOURCE_FONT_FAMILY: &str = "monospace";
+pub const SOURCE_FONT_FAMILY: &str = "Endless";
 /// Legacy layout estimate; interactive source hit testing uses painted geometry.
 pub const SOURCE_CHAR_WIDTH: f32 = 9.5;
 pub const DOCUMENT_PADDING_X: f32 = 24.0;

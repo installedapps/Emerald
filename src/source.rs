@@ -10,6 +10,7 @@ impl super::Emerald {
         cursor: usize,
         selection: Option<&emerald::Selection>,
         cursor_visible: bool,
+        spelling_errors: Arc<Vec<std::ops::Range<usize>>>,
         geometry: Rc<RefCell<Vec<SourceRowGeometry>>>,
     ) -> AnyElement {
         let line_start = line.range.start;
@@ -64,6 +65,37 @@ impl super::Emerald {
                         if newline_selected {
                             let end = f32::from(shaped.width);
                             highlight(end, end + 8.0, window);
+                        }
+                        for error in spelling_errors.iter().filter(|error| {
+                            error.start < line.range.end && error.end > line.range.start
+                        }) {
+                            let start = error.start.max(line.range.start) - line_start;
+                            let end = error.end.min(line.range.end) - line_start;
+                            let left = row.x_for_offset(start);
+                            let right = row.x_for_offset(end);
+                            if right <= left {
+                                continue;
+                            }
+                            let mut squiggle = gpui::PathBuilder::stroke(px(1.2));
+                            squiggle.move_to(
+                                bounds.origin + point(px(left), px(SOURCE_LINE_HEIGHT - 3.0)),
+                            );
+                            let mut x = left;
+                            let mut high = true;
+                            while x < right {
+                                x = (x + 3.0).min(right);
+                                squiggle.line_to(
+                                    bounds.origin
+                                        + point(
+                                            px(x),
+                                            px(SOURCE_LINE_HEIGHT - if high { 4.5 } else { 1.5 }),
+                                        ),
+                                );
+                                high = !high;
+                            }
+                            if let Ok(path) = squiggle.build() {
+                                window.paint_path(path, rgb(0xe05252));
+                            }
                         }
                         if let Err(error) = shaped.paint(
                             bounds.origin,
@@ -126,6 +158,7 @@ impl super::Emerald {
         if content_changed {
             let text: Arc<str> = self.state.text().into();
             let ranges = Arc::new(emerald::ui::source_line_ranges(&text));
+            let spelling_errors = Arc::new(super::spellcheck::misspellings(&text));
             let file_changed = self
                 .interaction
                 .source_lines_cache
@@ -143,6 +176,7 @@ impl super::Emerald {
                 file,
                 text,
                 ranges,
+                spelling_errors,
                 layouts: Rc::default(),
             });
         } else if width_changed {
@@ -155,6 +189,7 @@ impl super::Emerald {
         let cache = self.interaction.source_lines_cache.as_ref().unwrap();
         let text = cache.text.clone();
         let ranges = cache.ranges.clone();
+        let spelling_errors = cache.spelling_errors.clone();
         let layouts = cache.layouts.clone();
         let cursor_visible = self.blink_cursor.visible();
         let geometry = self.interaction.source_geometry.clone();
@@ -181,6 +216,7 @@ impl super::Emerald {
                         cursor,
                         selection.as_ref(),
                         cursor_visible,
+                        spelling_errors.clone(),
                         geometry.clone(),
                     )
                 }))
@@ -215,7 +251,7 @@ impl super::Emerald {
             .child(
                 canvas(
                     |_, _, _| (),
-                    move |_, _, window, cx| {
+                    move |bounds, _, window, cx| {
                         entity.update(cx, |view, cx| {
                             let layout_current = view
                                 .interaction
@@ -241,6 +277,71 @@ impl super::Emerald {
                                     }
                                     cx.notify();
                                 }
+                            }
+
+                            if layout_current && view.interaction.source_cursor_reveal_pending {
+                                let cursor = view.state.cursor();
+                                let cursor_row = view
+                                    .interaction
+                                    .source_geometry
+                                    .borrow()
+                                    .iter()
+                                    .filter(|row| {
+                                        let local = cursor.saturating_sub(row.start);
+                                        cursor >= row.start
+                                            && row
+                                                .stops
+                                                .last()
+                                                .is_some_and(|(end, _)| local <= *end)
+                                    })
+                                    .max_by_key(|row| row.start)
+                                    .map(|row| (row.origin.1, row.height));
+
+                                if let Some((row_top, row_height)) = cursor_row {
+                                    let viewport_top = f32::from(bounds.origin.y);
+                                    let viewport_bottom =
+                                        viewport_top + f32::from(bounds.size.height);
+                                    let row_bottom = row_top + row_height;
+                                    let scroll_delta = if row_top < viewport_top {
+                                        row_top - viewport_top
+                                    } else if row_bottom > viewport_bottom {
+                                        row_bottom - viewport_bottom
+                                    } else {
+                                        0.0
+                                    };
+                                    if scroll_delta != 0.0 {
+                                        view.source_list_state.scroll_by(px(scroll_delta));
+                                    }
+                                } else if let Some(index) = view
+                                    .interaction
+                                    .source_lines_cache
+                                    .as_ref()
+                                    .and_then(|cache| {
+                                        cache
+                                            .ranges
+                                            .iter()
+                                            .position(|range| {
+                                                range.start <= cursor && cursor < range.end
+                                            })
+                                            .or_else(|| {
+                                                cache.ranges.iter().position(|range| {
+                                                    range.is_empty() && range.start == cursor
+                                                })
+                                            })
+                                            .or_else(|| {
+                                                cache.ranges.last().and_then(|range| {
+                                                    (range.end == cursor).then_some(
+                                                        cache.ranges.len().saturating_sub(1),
+                                                    )
+                                                })
+                                            })
+                                    })
+                                {
+                                    view.source_list_state.scroll_to_reveal_item(index);
+                                }
+
+                                view.interaction.source_cursor_reveal_pending = false;
+                                cx.notify();
                             }
                         });
                         let moving = entity.downgrade();
@@ -292,11 +393,9 @@ impl super::Emerald {
                         .with_fallback(move || div().child(label.clone()).into_any_element())
                         .into_any_element();
                 }
-                let element = div()
-                    .min_w(px(0.0))
-                    .max_w_full()
-                    .whitespace_normal()
-                    .child(gpui::SharedString::new(part.text.clone()));
+                let element = div().min_w(px(0.0)).max_w_full().whitespace_normal().child(
+                    gpui::SharedString::new(preserve_repeated_spaces(&part.text)),
+                );
                 if let Some(target) = &part.target {
                     let target = target.clone();
                     let entity = entity.clone();
@@ -317,4 +416,27 @@ impl super::Emerald {
             })
             .collect()
     }
+}
+
+fn preserve_repeated_spaces(text: &str) -> String {
+    let mut rendered = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != ' ' {
+            rendered.push(character);
+            continue;
+        }
+        let mut count = 1;
+        while chars.peek() == Some(&' ') {
+            chars.next();
+            count += 1;
+        }
+        if count == 1 {
+            rendered.push(' ');
+        } else {
+            rendered.extend(std::iter::repeat_n('\u{00a0}', count));
+            rendered.push('\u{200b}');
+        }
+    }
+    rendered
 }

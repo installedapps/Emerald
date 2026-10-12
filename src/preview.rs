@@ -3,6 +3,7 @@ use crate::parser::extract_references;
 use crate::rendered::RenderBlock;
 use crate::rendered::{diagram_edges, DiagramEdge};
 use std::{collections::HashMap, ops::Range, sync::Arc};
+use tree_sitter::{Language, Node, Parser};
 
 pub const PREVIEW_CHUNK_SIZE: usize = 16;
 
@@ -94,6 +95,26 @@ fn chunks(len: usize) -> Vec<Range<usize>> {
 pub struct PreparedPreview {
     inline: HashMap<String, Vec<InlinePart>>,
     diagrams: HashMap<String, Vec<DiagramEdge>>,
+    code: HashMap<String, HashMap<String, Vec<CodeToken>>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CodeTokenKind {
+    Plain,
+    Keyword,
+    String,
+    Comment,
+    Number,
+    Function,
+    Type,
+    Constant,
+    Property,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CodeToken {
+    pub range: Range<usize>,
+    pub kind: CodeTokenKind,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,6 +143,14 @@ impl PreparedPreview {
 
     pub fn edges(&self, source: &str) -> &[DiagramEdge] {
         &self.diagrams[source]
+    }
+
+    pub fn code_tokens(&self, language: Option<&str>, source: &str) -> &[CodeToken] {
+        self.code
+            .get(source)
+            .and_then(|languages| languages.get(language.unwrap_or_default()))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     fn add_text(&mut self, text: &str) {
@@ -210,12 +239,188 @@ impl PreparedPreview {
                         .entry(source.clone())
                         .or_insert_with(|| diagram_edges(source));
                 }
-                RenderBlock::Code { .. }
-                | RenderBlock::Image { .. }
-                | RenderBlock::ThematicBreak => {}
+                RenderBlock::Code { language, code } => {
+                    self.code
+                        .entry(code.clone())
+                        .or_default()
+                        .entry(language.clone().unwrap_or_default())
+                        .or_insert_with(|| highlight_code(language.as_deref(), code));
+                }
+                RenderBlock::Image { .. } | RenderBlock::ThematicBreak => {}
             }
         }
     }
+}
+
+fn highlight_code(language: Option<&str>, source: &str) -> Vec<CodeToken> {
+    let Some(language) = language.and_then(language_for) else {
+        return vec![CodeToken {
+            range: 0..source.len(),
+            kind: CodeTokenKind::Plain,
+        }];
+    };
+    let mut parser = Parser::new();
+    if parser.set_language(&language).is_err() {
+        return vec![CodeToken {
+            range: 0..source.len(),
+            kind: CodeTokenKind::Plain,
+        }];
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return vec![CodeToken {
+            range: 0..source.len(),
+            kind: CodeTokenKind::Plain,
+        }];
+    };
+    let mut leaves = Vec::new();
+    collect_code_leaves(tree.root_node(), CodeTokenKind::Plain, source, &mut leaves);
+    leaves.sort_by_key(|token| token.range.start);
+
+    let mut tokens: Vec<CodeToken> = Vec::new();
+    let mut cursor = 0;
+    for leaf in leaves {
+        let start = leaf.range.start.max(cursor);
+        let end = leaf.range.end.min(source.len());
+        if start > cursor {
+            push_code_token(&mut tokens, cursor..start, CodeTokenKind::Plain);
+        }
+        if start < end {
+            push_code_token(&mut tokens, start..end, leaf.kind);
+            cursor = end;
+        }
+    }
+    if cursor < source.len() {
+        push_code_token(&mut tokens, cursor..source.len(), CodeTokenKind::Plain);
+    }
+    tokens
+}
+
+fn language_for(name: &str) -> Option<Language> {
+    match name.to_ascii_lowercase().as_str() {
+        "rust" | "rs" => Some(tree_sitter_rust::LANGUAGE.into()),
+        "json" => Some(tree_sitter_json::LANGUAGE.into()),
+        _ => None,
+    }
+}
+
+fn collect_code_leaves(
+    node: Node<'_>,
+    inherited: CodeTokenKind,
+    source: &str,
+    leaves: &mut Vec<CodeToken>,
+) {
+    let kind = node.kind().parse_kind().unwrap_or(inherited);
+    if node.child_count() == 0 {
+        if node.start_byte() < node.end_byte() {
+            let kind = if inherited == CodeTokenKind::String {
+                inherited
+            } else {
+                classify_leaf(node, source).unwrap_or(kind)
+            };
+            leaves.push(CodeToken {
+                range: node.start_byte()..node.end_byte(),
+                kind,
+            });
+        }
+        return;
+    }
+
+    let child_kind = match node.kind() {
+        "string_literal" | "raw_string_literal" | "char_literal" | "string" => {
+            CodeTokenKind::String
+        }
+        "line_comment" | "block_comment" | "comment" => CodeTokenKind::Comment,
+        "integer_literal" | "float_literal" | "number" => CodeTokenKind::Number,
+        _ => inherited,
+    };
+    let function = (node.kind() == "call_expression")
+        .then(|| node.child_by_field_name("function"))
+        .flatten();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_code_leaves(
+            child,
+            if function.is_some_and(|function| function.id() == child.id()) {
+                CodeTokenKind::Function
+            } else {
+                child_kind
+            },
+            source,
+            leaves,
+        );
+    }
+}
+
+trait ParseCodeTokenKind {
+    fn parse_kind(&self) -> Option<CodeTokenKind>;
+}
+
+impl ParseCodeTokenKind for str {
+    fn parse_kind(&self) -> Option<CodeTokenKind> {
+        match self {
+            "line_comment" | "block_comment" | "comment" => Some(CodeTokenKind::Comment),
+            "string_literal" | "raw_string_literal" | "char_literal" | "string" => {
+                Some(CodeTokenKind::String)
+            }
+            "integer_literal" | "float_literal" | "number" => Some(CodeTokenKind::Number),
+            "type_identifier" | "primitive_type" => Some(CodeTokenKind::Type),
+            "field_identifier" => Some(CodeTokenKind::Property),
+            "true" | "false" | "null" | "boolean_literal" => Some(CodeTokenKind::Constant),
+            "as" | "async" | "await" | "break" | "const" | "continue" | "crate" | "dyn"
+            | "default" | "else" | "enum" | "extern" | "fn" | "for" | "gen" | "if" | "impl"
+            | "in" | "let" | "loop" | "match" | "mod" | "move" | "mut" | "pub" | "ref"
+            | "return" | "self" | "Self" | "static" | "struct" | "super" | "trait" | "type"
+            | "union" | "unsafe" | "use" | "where" | "while" | "yield" => {
+                Some(CodeTokenKind::Keyword)
+            }
+            _ => None,
+        }
+    }
+}
+
+fn classify_leaf(node: Node<'_>, source: &str) -> Option<CodeTokenKind> {
+    let parent = node.parent()?;
+    if node.kind() == "identifier" {
+        if parent.kind() == "function_item"
+            && parent
+                .child_by_field_name("name")
+                .is_some_and(|name| name.id() == node.id())
+        {
+            return Some(CodeTokenKind::Function);
+        }
+        if parent.kind() == "pair"
+            && parent
+                .child_by_field_name("key")
+                .is_some_and(|key| key.id() == node.id())
+        {
+            return Some(CodeTokenKind::Type);
+        }
+    }
+    let text = &source[node.start_byte()..node.end_byte()];
+    if parent.kind() == "call_expression"
+        && parent
+            .child_by_field_name("function")
+            .is_some_and(|function| {
+                function.start_byte() <= node.start_byte() && function.end_byte() >= node.end_byte()
+            })
+        && !text.is_empty()
+    {
+        return Some(CodeTokenKind::Function);
+    }
+    node.kind().parse_kind()
+}
+
+fn push_code_token(tokens: &mut Vec<CodeToken>, range: Range<usize>, kind: CodeTokenKind) {
+    if range.is_empty() {
+        return;
+    }
+    if let Some(previous) = tokens.last_mut() {
+        if previous.kind == kind && previous.range.end == range.start {
+            previous.range.end = range.end;
+            return;
+        }
+    }
+    tokens.push(CodeToken { range, kind });
 }
 
 struct InlineImageMatch {

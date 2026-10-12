@@ -1,6 +1,7 @@
 pub mod cursor;
 mod document;
 pub mod graph;
+pub mod index;
 pub mod logging;
 pub mod parser;
 pub mod preview;

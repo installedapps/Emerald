@@ -5,7 +5,6 @@ pub(super) fn render(block: &RenderBlock, cx: &RenderContext<'_>) -> AnyElement 
         unreachable!("renderer and block variant diverged")
     };
     let document_path = cx.document_path;
-    let text_color = cx.text_color;
     let muted_text = cx.muted_text;
     {
         let path = document_path

@@ -44,9 +44,55 @@ impl super::Emerald {
         cx: &mut Context<Self>,
     ) {
         cx.stop_propagation();
-        self.interaction.context_menu = Some(ContextMenu::Editor {
-            position: event.position,
-        });
+        let spelling = if self.interaction.source_revealed {
+            let pointer = (f32::from(event.position.x), f32::from(event.position.y));
+            self.byte_offset_for_document_position(pointer.0, pointer.1)
+                .and_then(|offset| {
+                    self.interaction
+                        .source_lines_cache
+                        .as_ref()?
+                        .spelling_errors
+                        .iter()
+                        .find(|range| range.start <= offset && offset < range.end)
+                        .cloned()
+                })
+                .and_then(|range| {
+                    self.state
+                        .text()
+                        .get(range.clone())
+                        .map(|word| (range, word.to_owned()))
+                })
+        } else {
+            None
+        };
+        self.interaction.context_menu = Some(spelling.map_or_else(
+            || ContextMenu::Editor {
+                position: event.position,
+            },
+            |(range, word)| ContextMenu::Spelling {
+                position: event.position,
+                range,
+                suggestions: super::spellcheck::suggestions(&word),
+                word,
+            },
+        ));
+        cx.notify();
+    }
+
+    fn context_replace_misspelling(
+        &mut self,
+        range: std::ops::Range<usize>,
+        replacement: String,
+        _: &MouseDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.set_cursor(range.start, false);
+        self.state.set_cursor(range.end, true);
+        self.state.insert_text(&replacement);
+        self.interaction.context_menu = None;
+        self.schedule_parse_refresh(cx);
+        self.reveal_source(cx);
         cx.notify();
     }
 
@@ -142,6 +188,53 @@ impl super::Emerald {
                     )
                     .into_any_element()],
             ),
+            ContextMenu::Spelling {
+                position,
+                range,
+                word,
+                suggestions,
+            } => {
+                let mut items = vec![div()
+                    .p_2()
+                    .text_xs()
+                    .text_color(rgb(self.theme().muted_text))
+                    .child(format!("Suggestions for ‘{word}’"))
+                    .into_any_element()];
+                if suggestions.is_empty() {
+                    items.push(
+                        div()
+                            .p_2()
+                            .text_xs()
+                            .text_color(rgb(self.theme().muted_text))
+                            .child("No suggestions")
+                            .into_any_element(),
+                    );
+                } else {
+                    items.extend(suggestions.into_iter().map(|suggestion| {
+                        let range = range.clone();
+                        div()
+                            .w_full()
+                            .p_2()
+                            .cursor_pointer()
+                            .hover(|el| el.bg(rgb(self.theme().hover)))
+                            .child(suggestion.clone())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |view, event, window, cx| {
+                                    view.context_replace_misspelling(
+                                        range.clone(),
+                                        suggestion.clone(),
+                                        event,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .into_any_element()
+                    }));
+                }
+                (position, items)
+            }
             ContextMenu::Themes { position } => {
                 let theme = self.theme();
                 let favorites = self.theme_preferences.favorites.clone();

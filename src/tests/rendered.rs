@@ -66,6 +66,14 @@ fn renders_thematic_breaks_between_paragraphs() {
         render_blocks("----\ncode\n----").as_slice(),
         [RenderBlock::Code { .. }]
     ));
+    assert_eq!(
+        render_blocks("Before.\n\n' ' '\n\nAfter."),
+        vec![
+            RenderBlock::Paragraph("Before.".into()),
+            RenderBlock::Paragraph("' ' '".into()),
+            RenderBlock::Paragraph("After.".into()),
+        ]
+    );
 }
 
 #[test]
@@ -73,6 +81,26 @@ fn renders_headings_and_paragraphs_without_an_implicit_table_of_contents() {
     let blocks = render_blocks("= Title\n\nA paragraph.");
     assert!(matches!(blocks[0], RenderBlock::Heading { level: 1, .. }));
     assert!(matches!(blocks[1], RenderBlock::Paragraph(_)));
+}
+
+#[test]
+fn preview_keeps_blank_line_separated_paragraphs_in_distinct_rows() {
+    let snapshot = RenderSnapshot::from_source(
+        "First paragraph with several lines.\ncontinued on the next source line.\n\nSecond paragraph starts after a blank line.",
+    );
+
+    assert_eq!(
+        snapshot.blocks.as_slice(),
+        [
+            RenderBlock::Paragraph(
+                "First paragraph with several lines. continued on the next source line.".into()
+            ),
+            RenderBlock::Paragraph("Second paragraph starts after a blank line.".into()),
+        ]
+    );
+    assert_eq!(snapshot.rows.len(), 2);
+    assert_eq!(snapshot.rows[0].block_index, 0);
+    assert_eq!(snapshot.rows[1].block_index, 1);
 }
 
 #[test]

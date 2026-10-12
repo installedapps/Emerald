@@ -16,8 +16,8 @@ use emerald::ui::{
 use emerald::{EditCommand, EditorState};
 #[allow(unused_imports)]
 use gpui::{
-    div, list, prelude::*, px, rgb, size, uniform_list, AnyElement, App, Application, Bounds,
-    ClipboardItem, Context, FocusHandle, Focusable, IntoElement, Keystroke, ListAlignment,
+    div, list, prelude::*, px, rgb, size, uniform_list, AnimationExt, AnyElement, App, Application,
+    Bounds, ClipboardItem, Context, FocusHandle, Focusable, IntoElement, Keystroke, ListAlignment,
     ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     PathPromptOptions, PromptLevel, Render, Window, WindowBounds, WindowOptions,
 };
@@ -44,8 +44,10 @@ struct InteractionState {
     editing_revision: u64,
     parse_refresh_revision: u64,
     source_revealed: bool,
+    editor_view_mode: EditorViewMode,
     source_lines_cache: Option<SourceLinesCache>,
     source_wrap_width: f32,
+    source_cursor_reveal_pending: bool,
     source_geometry: Rc<RefCell<Vec<source_geometry::SourceRowGeometry>>>,
     pending_source_click: Option<((f32, f32), bool)>,
     renaming: bool,
@@ -68,6 +70,30 @@ struct InteractionState {
     links_sidebar_visible: bool,
     links_sidebar_width: f32,
     links_sidebar_resize: Option<(f32, f32)>,
+    collapsed_backlinks: std::collections::HashSet<PathBuf>,
+    link_panel_direction: sidebar_links::LinkPanelDirection,
+    links_sidebar_mode: sidebar_links::LinksSidebarMode,
+    selected_sidebar_tag: Option<String>,
+    palette: Option<palette::CommandPalette>,
+    palette_closing: bool,
+    palette_revision: u64,
+    headings_folded: bool,
+    note_transition_revision: u64,
+    toast: Option<String>,
+    toast_revision: u64,
+}
+
+const SIDEBAR_BACKGROUND_OPACITY: f32 = 0.94;
+
+fn sidebar_background(theme: EmeraldTheme) -> gpui::Rgba {
+    rgb(theme.sidebar).opacity(SIDEBAR_BACKGROUND_OPACITY)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditorViewMode {
+    Automatic,
+    Source,
+    Preview,
 }
 
 #[derive(Clone)]
@@ -83,6 +109,12 @@ enum ContextMenu {
     Themes {
         position: gpui::Point<gpui::Pixels>,
     },
+    Spelling {
+        position: gpui::Point<gpui::Pixels>,
+        range: std::ops::Range<usize>,
+        word: String,
+        suggestions: Vec<String>,
+    },
 }
 
 struct SourceLinesCache {
@@ -92,6 +124,7 @@ struct SourceLinesCache {
     file: PathBuf,
     text: Arc<str>,
     ranges: Arc<Vec<std::ops::Range<usize>>>,
+    spelling_errors: Arc<Vec<std::ops::Range<usize>>>,
     layouts: Rc<RefCell<source_layout::SourceLayoutCache>>,
 }
 
@@ -112,6 +145,8 @@ mod graph_scene;
 mod graph_view;
 #[path = "input.rs"]
 mod input;
+#[path = "palette.rs"]
+mod palette;
 #[path = "rendered_view.rs"]
 mod rendered_view;
 #[cfg(test)]
@@ -135,8 +170,85 @@ mod source;
 mod source_geometry;
 #[path = "source_layout.rs"]
 mod source_layout;
+#[path = "spellcheck.rs"]
+mod spellcheck;
+#[path = "tags.rs"]
+mod tags;
 #[path = "workspace_actions.rs"]
 mod workspace_actions;
+
+pub(crate) fn run() {
+    use gpui::{prelude::*, px, size, Bounds, Focusable, WindowBounds, WindowOptions};
+
+    emerald::logging::init();
+    tracing::info!("starting Emerald");
+    let app = gpui_platform::application().with_assets(gpui_kit_assets::Assets);
+    app.run(|cx| {
+        gpui_kit::init(cx);
+        let window = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                        None,
+                        size(px(1200.0), px(760.0)),
+                        cx,
+                    ))),
+                    titlebar: None,
+                    ..Default::default()
+                },
+                |_, cx| cx.new(Emerald::new),
+            )
+            .unwrap_or_else(|error| {
+                tracing::error!(error = %error, "failed to open Emerald window");
+                panic!("could not open the Emerald window: {error}");
+            });
+
+        window
+            .update(cx, |view, window, cx| {
+                window.focus(&view.focus_handle(cx), cx);
+                cx.activate(true);
+            })
+            .unwrap_or_else(|error| {
+                tracing::error!(error = %error, "failed to focus Emerald editor");
+                panic!("could not focus the Emerald editor: {error}");
+            });
+
+        let view = window
+            .update(cx, |_, _, cx| cx.entity())
+            .unwrap_or_else(|error| {
+                tracing::error!(error = %error, "failed to access Emerald view");
+                panic!("could not access the Emerald view: {error}");
+            });
+        cx.intercept_keystrokes(move |event, window, cx| {
+            view.update(cx, |view, cx| {
+                view.handle_keystroke(&event.keystroke, window, cx)
+            })
+        })
+        .detach();
+
+        window
+            .update(cx, |view, window, cx| {
+                let blink_interval = view.blink_cursor.interval();
+                cx.spawn_in(window, async move |view, cx| loop {
+                    cx.background_executor().timer(blink_interval).await;
+                    if view
+                        .update(cx, |view, cx| {
+                            view.blink_cursor.tick();
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                })
+                .detach();
+            })
+            .unwrap_or_else(|error| {
+                tracing::error!(error = %error, "failed to start Emerald cursor blink");
+                panic!("could not start the Emerald cursor blink: {error}");
+            });
+    });
+}
 
 impl Emerald {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
@@ -164,8 +276,10 @@ impl Emerald {
                 editing_revision: 0,
                 parse_refresh_revision: 0,
                 source_revealed: false,
+                editor_view_mode: EditorViewMode::Automatic,
                 source_lines_cache: None,
                 source_wrap_width: 0.0,
+                source_cursor_reveal_pending: false,
                 source_geometry: Rc::default(),
                 pending_source_click: None,
                 renaming: false,
@@ -188,6 +302,17 @@ impl Emerald {
                 links_sidebar_visible: true,
                 links_sidebar_width: 260.0,
                 links_sidebar_resize: None,
+                collapsed_backlinks: std::collections::HashSet::new(),
+                link_panel_direction: sidebar_links::LinkPanelDirection::Backlinks,
+                links_sidebar_mode: sidebar_links::LinksSidebarMode::Links,
+                selected_sidebar_tag: None,
+                palette: None,
+                palette_closing: false,
+                palette_revision: 0,
+                headings_folded: false,
+                note_transition_revision: 0,
+                toast: None,
+                toast_revision: 0,
             },
             render_cache: RenderCache::default(),
             focus_handle,
@@ -282,7 +407,11 @@ impl Emerald {
     }
 
     fn reveal_source(&mut self, cx: &mut Context<Self>) {
+        if self.interaction.editor_view_mode == EditorViewMode::Preview {
+            self.interaction.editor_view_mode = EditorViewMode::Automatic;
+        }
         self.interaction.source_revealed = true;
+        self.interaction.source_cursor_reveal_pending = true;
         self.interaction.editing_revision = self.interaction.editing_revision.wrapping_add(1);
         let revision = self.interaction.editing_revision;
 
@@ -291,7 +420,8 @@ impl Emerald {
                 .timer(SOURCE_IDLE_PREVIEW_DELAY)
                 .await;
             let _ = view.update(cx, |view: &mut Emerald, cx| {
-                if !matches!(view.interaction.context_menu, Some(ContextMenu::Slash(_)))
+                if view.interaction.editor_view_mode != EditorViewMode::Source
+                    && !matches!(view.interaction.context_menu, Some(ContextMenu::Slash(_)))
                     && view.interaction.editing_revision == revision
                     && source_can_return_to_preview(
                         view.interaction.is_mouse_selecting,
@@ -304,6 +434,26 @@ impl Emerald {
             });
         })
         .detach();
+    }
+
+    pub(super) fn toggle_editor_view(&mut self, cx: &mut Context<Self>) {
+        let is_source = match self.interaction.editor_view_mode {
+            EditorViewMode::Source => true,
+            EditorViewMode::Preview => false,
+            EditorViewMode::Automatic => {
+                self.interaction.source_revealed || self.state.selection().is_some()
+            }
+        };
+        self.interaction.editor_view_mode = if is_source {
+            self.interaction.source_revealed = false;
+            EditorViewMode::Preview
+        } else {
+            self.interaction.source_revealed = true;
+            self.interaction.source_cursor_reveal_pending = true;
+            EditorViewMode::Source
+        };
+        self.interaction.editing_revision = self.interaction.editing_revision.wrapping_add(1);
+        cx.notify();
     }
 
     fn schedule_parse_refresh(&mut self, cx: &mut Context<Self>) {
@@ -355,6 +505,7 @@ impl Render for Emerald {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = shell_layout(f32::from(window.viewport_size().width));
         let shell = div()
+            .relative()
             .flex()
             .size_full()
             .min_w(px(0.0))
@@ -373,8 +524,50 @@ impl Render for Emerald {
                 cx.listener(Self::finish_sidebar_resize),
             )
             .on_mouse_down(MouseButton::Left, cx.listener(Self::dismiss_context_menu));
-        if let Some(menu) = self.interaction.context_menu.clone() {
+        let shell = if let Some(palette) = self.interaction.palette.clone() {
+            shell.child(self.render_command_palette(palette, cx))
+        } else if let Some(menu) = self.interaction.context_menu.clone() {
             shell.child(self.render_context_menu(menu, cx))
+        } else {
+            shell
+        };
+        if let Some(message) = self.interaction.toast.clone() {
+            let theme = self.theme();
+            shell.child(
+                div()
+                    .absolute()
+                    .right_6()
+                    .bottom_6()
+                    .with_animation(
+                        gpui::SharedString::from(format!(
+                            "note-toast-{}",
+                            self.interaction.toast_revision
+                        )),
+                        gpui::Animation::new(Duration::from_millis(180)),
+                        |element, phase| element.opacity(phase).mt(px(8.0 * (1.0 - phase))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(theme.accent))
+                            .bg(rgb(theme.menu))
+                            .text_color(rgb(theme.text))
+                            .shadow(vec![gpui::BoxShadow::new(
+                                px(0.0),
+                                px(4.0),
+                                rgb(0x000000).opacity(0.28).into(),
+                            )
+                            .blur_radius(px(16.0))])
+                            .child(div().text_color(rgb(theme.accent)).child("✓"))
+                            .child(message),
+                    ),
+            )
         } else {
             shell
         }

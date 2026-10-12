@@ -235,7 +235,10 @@ fn fallback_blocks(source: &str) -> Vec<ParsedBlock> {
             .chars()
             .take_while(|character| *character == '=')
             .count();
-        if marker_count > 0
+        if is_thematic_break_line(trimmed) {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            blocks.push(ParsedBlock::ThematicBreak);
+        } else if marker_count > 0
             && trimmed
                 .get(marker_count..)
                 .is_some_and(|rest| rest.starts_with(' '))
@@ -253,6 +256,23 @@ fn fallback_blocks(source: &str) -> Vec<ParsedBlock> {
     }
     flush_paragraph(&mut paragraph, &mut blocks);
     blocks
+}
+
+fn is_thematic_break_line(line: &str) -> bool {
+    if line == "'''" {
+        return true;
+    }
+
+    let mut marker = None;
+    let mut count = 0;
+    for character in line.chars().filter(|character| *character != ' ') {
+        if !matches!(character, '-' | '*') || marker.is_some_and(|marker| marker != character) {
+            return false;
+        }
+        marker = Some(character);
+        count += 1;
+    }
+    count == 3
 }
 
 fn fallback_inline_text(text: &str) -> String {
@@ -500,7 +520,7 @@ fn node_text(node: &asciidork_ast::InlineNode<'_>) -> String {
             asciidork_ast::SymbolKind::DoubleLeftArrow => "<=".into(),
             _ => String::new(),
         },
-        Inline::MultiCharWhitespace(_) => " ".into(),
+        Inline::MultiCharWhitespace(text) => text.to_string(),
         Inline::CurlyQuote(kind) => match kind {
             asciidork_ast::CurlyKind::LeftDouble => "“".into(),
             asciidork_ast::CurlyKind::RightDouble => "”".into(),
@@ -516,8 +536,9 @@ fn inline_source(nodes: &InlineNodes<'_>) -> String {
     nodes
         .iter()
         .map(|node| match &node.content {
-            Inline::Newline => "\n".to_string(),
+            Inline::Newline | Inline::LineBreak => "\n".to_string(),
             Inline::Text(text) => text.to_string(),
+            Inline::MultiCharWhitespace(text) => text.to_string(),
             Inline::Symbol(asciidork_ast::SymbolKind::SingleRightArrow) => "->".to_string(),
             Inline::Symbol(asciidork_ast::SymbolKind::DoubleRightArrow) => "=>".to_string(),
             _ => String::new(),

@@ -1,4 +1,5 @@
 use super::*;
+use gpui::AnimationExt;
 
 impl super::Emerald {
     pub(super) fn render_editor(
@@ -39,10 +40,21 @@ impl super::Emerald {
             self.state.cursor(),
             save_status
         );
-        let text = self.state.text();
         let active_path = self.state.active_file().to_path_buf();
-        let source_view_active =
-            self.interaction.source_revealed || self.state.selection().is_some();
+        let note_tags = self
+            .state
+            .workspace_index()
+            .note(&active_path)
+            .map(|note| super::tags::extract_tags(&note.text))
+            .unwrap_or_default();
+        let text = self.state.text();
+        let source_view_active = match self.interaction.editor_view_mode {
+            EditorViewMode::Source => true,
+            EditorViewMode::Preview => false,
+            EditorViewMode::Automatic => {
+                self.interaction.source_revealed || self.state.selection().is_some()
+            }
+        };
         let scrollbar_state = if source_view_active {
             self.source_list_state.clone()
         } else {
@@ -60,11 +72,32 @@ impl super::Emerald {
         let blocks = snapshot.map_or_else(Default::default, |snapshot| snapshot.blocks.clone());
         let prepared = snapshot.map_or_else(Default::default, |snapshot| snapshot.prepared.clone());
         let rows = snapshot.map_or_else(Default::default, |snapshot| snapshot.rows.clone());
-        if self.document_list_count != rows.len()
+        let visible_rows = if self.interaction.headings_folded {
+            let mut in_section = false;
+            rows.iter()
+                .filter(|row| match blocks.get(row.block_index) {
+                    Some(RenderBlock::Heading { .. }) => {
+                        in_section = true;
+                        true
+                    }
+                    _ => !in_section,
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            rows.as_ref().clone()
+        };
+        let first_heading_row = visible_rows.iter().position(|row| {
+            matches!(
+                blocks.get(row.block_index),
+                Some(RenderBlock::Heading { .. })
+            )
+        });
+        if self.document_list_count != visible_rows.len()
             || self.document_list_file.as_ref() != Some(&active_path)
         {
-            self.document_list_state.reset(rows.len());
-            self.document_list_count = rows.len();
+            self.document_list_state.reset(visible_rows.len());
+            self.document_list_count = visible_rows.len();
             self.document_list_file = Some(active_path.clone());
         }
         if self
@@ -72,7 +105,8 @@ impl super::Emerald {
             .as_ref()
             .is_some_and(|previous| !Arc::ptr_eq(previous, &blocks))
         {
-            self.document_list_state.splice(0..rows.len(), rows.len());
+            self.document_list_state
+                .splice(0..visible_rows.len(), visible_rows.len());
         }
         self.document_list_blocks = Some(blocks.clone());
         let chrome = editor_chrome(layout);
@@ -115,12 +149,27 @@ impl super::Emerald {
         } else {
             document
         };
+        let revision = self.interaction.note_transition_revision;
+        let document = document.with_animation(
+            gpui::SharedString::from(format!("note-content-{revision}")),
+            gpui::Animation::new(Duration::from_millis(180)),
+            move |element, phase| {
+                if revision == 0 {
+                    element
+                } else {
+                    element
+                        .opacity(phase)
+                        .mt(px(chrome.margin + 6.0 * (1.0 - phase)))
+                }
+            },
+        );
 
         div()
             .flex()
             .flex_col()
             .flex_1()
-            .size_full()
+            .min_w(px(0.0))
+            .when(layout.mode == LayoutMode::Desktop, |panel| panel.h_full())
             .bg(rgb(theme.window_background))
             .when_some(self.interaction.file_load_error.clone(), |panel, error| {
                 panel.child(
@@ -200,6 +249,41 @@ impl super::Emerald {
                                     .items_center()
                                     .gap_2()
                                     .child(status)
+                                    .child(
+                                        div()
+                                            .id("source-preview-toggle")
+                                            .role(gpui::Role::Button)
+                                            .aria_label(if source_view_active {
+                                                "Show live preview"
+                                            } else {
+                                                "Edit source"
+                                            })
+                                            .tab_stop(true)
+                                            .focus_visible(|button| {
+                                                button
+                                                    .bg(rgb(theme.hover))
+                                                    .text_color(rgb(theme.text))
+                                            })
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .text_sm()
+                                            .text_color(rgb(if source_view_active {
+                                                theme.accent
+                                            } else {
+                                                theme.muted_text
+                                            }))
+                                            .hover(|button| {
+                                                button
+                                                    .bg(rgb(theme.hover))
+                                                    .text_color(rgb(theme.text))
+                                            })
+                                            .cursor_pointer()
+                                            .child("✎")
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                view.toggle_editor_view(cx);
+                                            })),
+                                    )
                                     .child(self.sidebar_toggle_button(true, cx)),
                             ),
                     )
@@ -226,17 +310,34 @@ impl super::Emerald {
                                         let list_state = self.document_list_state.clone();
                                         let entity = cx.entity();
                                         let document_path = active_path.clone();
+                                        let note_tags = note_tags.clone();
                                         list(list_state, move |index, _, _| {
-                                            Self::render_preview_row(
+                                            let row = Self::render_preview_row(
                                                 index,
-                                                &rows[index],
+                                                &visible_rows[index],
                                                 &blocks,
                                                 style,
                                                 theme,
                                                 &prepared,
                                                 &document_path,
                                                 entity.clone(),
-                                            )
+                                            );
+                                            if Some(index) == first_heading_row
+                                                && !note_tags.is_empty()
+                                            {
+                                                div()
+                                                    .w_full()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_2()
+                                                    .child(row)
+                                                    .child(super::tags::render_note_tags(
+                                                        &note_tags, theme,
+                                                    ))
+                                                    .into_any_element()
+                                            } else {
+                                                row
+                                            }
                                         })
                                         .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
                                         .w_full()
