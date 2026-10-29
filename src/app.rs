@@ -48,6 +48,7 @@ struct InteractionState {
     source_lines_cache: Option<SourceLinesCache>,
     source_wrap_width: f32,
     source_cursor_reveal_pending: bool,
+    source_cursor_reveal_waiting_for_layout: bool,
     source_geometry: Rc<RefCell<Vec<source_geometry::SourceRowGeometry>>>,
     pending_source_click: Option<((f32, f32), bool)>,
     renaming: bool,
@@ -280,6 +281,7 @@ impl Emerald {
                 source_lines_cache: None,
                 source_wrap_width: 0.0,
                 source_cursor_reveal_pending: false,
+                source_cursor_reveal_waiting_for_layout: false,
                 source_geometry: Rc::default(),
                 pending_source_click: None,
                 renaming: false,
@@ -412,6 +414,7 @@ impl Emerald {
         }
         self.interaction.source_revealed = true;
         self.interaction.source_cursor_reveal_pending = true;
+        self.interaction.source_cursor_reveal_waiting_for_layout = false;
         self.interaction.editing_revision = self.interaction.editing_revision.wrapping_add(1);
         let revision = self.interaction.editing_revision;
 
@@ -450,6 +453,7 @@ impl Emerald {
         } else {
             self.interaction.source_revealed = true;
             self.interaction.source_cursor_reveal_pending = true;
+            self.interaction.source_cursor_reveal_waiting_for_layout = false;
             EditorViewMode::Source
         };
         self.interaction.editing_revision = self.interaction.editing_revision.wrapping_add(1);

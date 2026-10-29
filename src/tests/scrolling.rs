@@ -107,6 +107,93 @@ fn scroll(cx: &mut VisualTestContext, delta: f32) {
     });
 }
 
+fn draw_source(
+    cx: &mut VisualTestContext,
+    entity: &gpui::Entity<Emerald>,
+    origin: (f32, f32),
+    viewport: (f32, f32),
+) {
+    cx.draw(
+        point(px(origin.0), px(origin.1)),
+        size(px(viewport.0), px(viewport.1)),
+        |window, cx| {
+            let element = entity.update(cx, |view, cx| view.render_source(cx.entity(), window));
+            cx.new(|_| DrawPreview(Some(element))).into_any_element()
+        },
+    );
+}
+
+fn request_source_reveal(entity: &gpui::Entity<Emerald>, cx: &mut VisualTestContext) {
+    entity.update(cx, |view, _| {
+        view.interaction.source_cursor_reveal_pending = true;
+        view.interaction.source_cursor_reveal_waiting_for_layout = false;
+    });
+}
+
+fn settle_source_reveal(
+    cx: &mut VisualTestContext,
+    entity: &gpui::Entity<Emerald>,
+    origin: (f32, f32),
+    viewport: (f32, f32),
+) {
+    for _ in 0..12 {
+        draw_source(cx, entity, origin, viewport);
+    }
+    entity.read_with(cx, |view, _| {
+        let top = view.source_list_state.logical_scroll_top();
+        assert!(
+            !view.interaction.source_cursor_reveal_pending,
+            "reveal did not settle: cursor={}, waiting={}, top={}:{}, rows={:?}",
+            view.state.cursor(),
+            view.interaction.source_cursor_reveal_waiting_for_layout,
+            top.item_ix,
+            f32::from(top.offset_in_item),
+            view.interaction
+                .source_geometry
+                .borrow()
+                .iter()
+                .map(|row| (row.start, row.origin.1))
+                .collect::<Vec<_>>()
+        );
+    });
+}
+
+fn assert_source_caret_visible(
+    entity: &gpui::Entity<Emerald>,
+    cx: &mut VisualTestContext,
+    viewport_top: f32,
+    viewport_height: f32,
+) {
+    entity.read_with(cx, |view, _| {
+        let cursor = view.state.cursor();
+        let geometry = view.interaction.source_geometry.borrow();
+        let row = geometry
+            .iter()
+            .filter(|row| {
+                let local = cursor.saturating_sub(row.start);
+                cursor >= row.start && row.stops.last().is_some_and(|(end, _)| local <= *end)
+            })
+            .max_by_key(|row| row.start)
+            .unwrap_or_else(|| {
+                panic!(
+                    "caret row at {cursor} should be painted; visible starts: {:?}",
+                    geometry.iter().map(|row| row.start).collect::<Vec<_>>()
+                )
+            });
+        assert!(
+            row.origin.1 >= viewport_top,
+            "caret row starts above viewport: {} < {viewport_top}",
+            row.origin.1
+        );
+        assert!(
+            row.origin.1 + row.height <= viewport_top + viewport_height,
+            "caret row ends below viewport: {} > {}",
+            row.origin.1 + row.height,
+            viewport_top + viewport_height
+        );
+    });
+}
+
 #[gpui::test]
 fn large_preview_scrolls_down_and_up_without_building_the_whole_block(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
@@ -327,4 +414,124 @@ fn source_layout_cache_survives_selection_but_not_edits_resize_or_file_switch(
     assert!(Rc::ptr_eq(&resized, &draw(cx, 320.)));
     entity.update(cx, |view, _| view.state.create_file("other.adoc").unwrap());
     assert!(!Rc::ptr_eq(&resized, &draw(cx, 320.)));
+}
+
+#[gpui::test]
+fn source_reveal_follows_eof_across_edits_and_viewport_heights(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    for (height, trailing_newline) in [(112.0, false), (280.0, true)] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = EditorState::open_or_create(temp.path()).unwrap();
+        let mut text = "source line\n".repeat(30);
+        if !trailing_newline {
+            text.push_str("tail");
+        }
+        state.select_all();
+        state.insert_text(&text);
+        let entity = cx.new(|cx| Emerald::with_state(state, cx));
+        let origin = (31.0, 47.0);
+        let viewport = (420.0, height);
+
+        request_source_reveal(&entity, cx);
+        settle_source_reveal(cx, &entity, origin, viewport);
+        assert_source_caret_visible(&entity, cx, origin.1, height);
+
+        for insertion in ["\n", "continued", "\n"] {
+            entity.update(cx, |view, _| view.state.insert_text(insertion));
+            request_source_reveal(&entity, cx);
+            settle_source_reveal(cx, &entity, origin, viewport);
+            assert_source_caret_visible(&entity, cx, origin.1, height);
+        }
+    }
+}
+
+#[gpui::test]
+fn source_reveal_uses_the_interior_caret_row_for_lines_and_soft_wraps(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let origin = (24.0, 63.0);
+    let viewport = (260.0, 140.0);
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut state = EditorState::open_or_create(temp.path()).unwrap();
+    state.select_all();
+    state.insert_text(
+        &(0..80)
+            .map(|index| format!("source line {index:02}\n"))
+            .collect::<String>(),
+    );
+    let entity = cx.new(|cx| Emerald::with_state(state, cx));
+    request_source_reveal(&entity, cx);
+    settle_source_reveal(cx, &entity, origin, viewport);
+
+    entity.update(cx, |view, _| {
+        let cursor = view.state.text().find("source line 08").unwrap() + 7;
+        view.state.set_cursor(cursor, false);
+        view.state.insert_text("X");
+    });
+    request_source_reveal(&entity, cx);
+    settle_source_reveal(cx, &entity, origin, viewport);
+    assert_source_caret_visible(&entity, cx, origin.1, viewport.1);
+    entity.read_with(cx, |view, _| {
+        let last = view
+            .interaction
+            .source_lines_cache
+            .as_ref()
+            .unwrap()
+            .ranges
+            .len()
+            - 1;
+        assert!(view.source_list_state.logical_scroll_top().item_ix < last);
+    });
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut state = EditorState::open_or_create(temp.path()).unwrap();
+    state.select_all();
+    state.insert_text(&"soft wrapped source text ".repeat(80));
+    state.set_cursor(700, false);
+    let wrapped = cx.new(|cx| Emerald::with_state(state, cx));
+    request_source_reveal(&wrapped, cx);
+    settle_source_reveal(cx, &wrapped, origin, viewport);
+    assert_source_caret_visible(&wrapped, cx, origin.1, viewport.1);
+}
+
+#[gpui::test]
+fn source_manual_scroll_stays_put_until_an_edit_requests_reveal(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let mut state = EditorState::open_or_create(temp.path()).unwrap();
+    state.select_all();
+    state.insert_text(&"source line\n".repeat(60));
+    let cx = cx.add_empty_window();
+    let entity = cx.new(|cx| Emerald::with_state(state, cx));
+    let origin = (0.0, 0.0);
+    let viewport = (420.0, 168.0);
+
+    request_source_reveal(&entity, cx);
+    settle_source_reveal(cx, &entity, origin, viewport);
+    for _ in 0..20 {
+        scroll(cx, 120.0);
+        draw_source(cx, &entity, origin, viewport);
+    }
+    let scrolled = entity.read_with(cx, |view, _| {
+        assert!(!view.interaction.source_cursor_reveal_pending);
+        view.source_list_state.logical_scroll_top()
+    });
+    draw_source(cx, &entity, origin, viewport);
+    draw_source(cx, &entity, origin, viewport);
+    entity.read_with(cx, |view, _| {
+        let current = view.source_list_state.logical_scroll_top();
+        assert_eq!(current.item_ix, scrolled.item_ix);
+        assert_eq!(current.offset_in_item, scrolled.offset_in_item);
+    });
+
+    entity.update(cx, |view, _| view.state.insert_text("continued"));
+    request_source_reveal(&entity, cx);
+    settle_source_reveal(cx, &entity, origin, viewport);
+    assert_source_caret_visible(&entity, cx, origin.1, viewport.1);
+    entity.read_with(cx, |view, _| {
+        let current = view.source_list_state.logical_scroll_top();
+        assert!(
+            current.item_ix != scrolled.item_ix
+                || current.offset_in_item != scrolled.offset_in_item
+        );
+    });
 }

@@ -22,6 +22,7 @@ pub(super) fn render(block: &RenderBlock, cx: &RenderContext<'_>) -> AnyElement 
             3 => 20.0,
             _ => 18.0,
         }))
+        .pb_6()
         .children(Emerald::render_text_parts(
             text,
             prepared,

@@ -193,7 +193,7 @@ impl super::Emerald {
         let layouts = cache.layouts.clone();
         let cursor_visible = self.blink_cursor.visible();
         let geometry = self.interaction.source_geometry.clone();
-        let frame_geometry = geometry.clone();
+        geometry.borrow_mut().clear();
         let width_entity = entity.clone();
         let list = list(self.source_list_state.clone(), move |index, window, _| {
             let range = ranges[index].clone();
@@ -233,7 +233,6 @@ impl super::Emerald {
             .child(
                 canvas(
                     move |bounds, _, cx| {
-                        frame_geometry.borrow_mut().clear();
                         let width = (f32::from(bounds.size.width) - 10.0).max(1.0);
                         width_entity.update(cx, |view, cx| {
                             if view.interaction.source_wrap_width != width {
@@ -245,6 +244,7 @@ impl super::Emerald {
                     |_, _, _, _| (),
                 )
                 .absolute()
+                .inset_0()
                 .size_full(),
             )
             .child(list)
@@ -280,68 +280,98 @@ impl super::Emerald {
                             }
 
                             if layout_current && view.interaction.source_cursor_reveal_pending {
-                                let cursor = view.state.cursor();
-                                let cursor_row = view
-                                    .interaction
-                                    .source_geometry
-                                    .borrow()
-                                    .iter()
-                                    .filter(|row| {
-                                        let local = cursor.saturating_sub(row.start);
-                                        cursor >= row.start
-                                            && row
-                                                .stops
-                                                .last()
-                                                .is_some_and(|(end, _)| local <= *end)
-                                    })
-                                    .max_by_key(|row| row.start)
-                                    .map(|row| (row.origin.1, row.height));
+                                if view.interaction.source_cursor_reveal_waiting_for_layout {
+                                    view.interaction.source_cursor_reveal_waiting_for_layout =
+                                        false;
+                                    cx.notify();
+                                } else {
+                                    let cursor = view.state.cursor();
+                                    let text_len = view
+                                        .interaction
+                                        .source_lines_cache
+                                        .as_ref()
+                                        .map_or(0, |cache| cache.text.len());
 
-                                if let Some((row_top, row_height)) = cursor_row {
-                                    let viewport_top = f32::from(bounds.origin.y);
-                                    let viewport_bottom =
-                                        viewport_top + f32::from(bounds.size.height);
-                                    let row_bottom = row_top + row_height;
-                                    let scroll_delta = if row_top < viewport_top {
-                                        row_top - viewport_top
-                                    } else if row_bottom > viewport_bottom {
-                                        row_bottom - viewport_bottom
+                                    if cursor == text_len {
+                                        view.source_list_state.scroll_to_end();
+                                        view.interaction.source_cursor_reveal_pending = false;
+                                        cx.notify();
                                     } else {
-                                        0.0
-                                    };
-                                    if scroll_delta != 0.0 {
-                                        view.source_list_state.scroll_by(px(scroll_delta));
-                                    }
-                                } else if let Some(index) = view
-                                    .interaction
-                                    .source_lines_cache
-                                    .as_ref()
-                                    .and_then(|cache| {
-                                        cache
-                                            .ranges
+                                        let cursor_row = view
+                                            .interaction
+                                            .source_geometry
+                                            .borrow()
                                             .iter()
-                                            .position(|range| {
-                                                range.start <= cursor && cursor < range.end
+                                            .filter(|row| {
+                                                let local = cursor.saturating_sub(row.start);
+                                                cursor >= row.start
+                                                    && row
+                                                        .stops
+                                                        .last()
+                                                        .is_some_and(|(end, _)| local <= *end)
                                             })
-                                            .or_else(|| {
-                                                cache.ranges.iter().position(|range| {
-                                                    range.is_empty() && range.start == cursor
-                                                })
-                                            })
-                                            .or_else(|| {
-                                                cache.ranges.last().and_then(|range| {
-                                                    (range.end == cursor).then_some(
-                                                        cache.ranges.len().saturating_sub(1),
-                                                    )
-                                                })
-                                            })
-                                    })
-                                {
-                                    view.source_list_state.scroll_to_reveal_item(index);
-                                }
+                                            .max_by_key(|row| row.start)
+                                            .map(|row| (row.origin.1, row.height));
 
-                                view.interaction.source_cursor_reveal_pending = false;
-                                cx.notify();
+                                        if let Some((row_top, row_height)) = cursor_row {
+                                            let viewport_top = f32::from(bounds.origin.y);
+                                            let viewport_bottom =
+                                                viewport_top + f32::from(bounds.size.height);
+                                            let row_bottom = row_top + row_height;
+                                            let scroll_delta = if row_top < viewport_top {
+                                                row_top - viewport_top
+                                            } else if row_bottom > viewport_bottom {
+                                                row_bottom - viewport_bottom
+                                            } else {
+                                                0.0
+                                            };
+                                            if scroll_delta != 0.0 {
+                                                view.source_list_state.scroll_by(px(scroll_delta));
+                                                view.interaction
+                                                    .source_cursor_reveal_waiting_for_layout = true;
+                                            } else {
+                                                view.interaction.source_cursor_reveal_pending =
+                                                    false;
+                                            }
+                                        } else if let Some(index) = view
+                                            .interaction
+                                            .source_lines_cache
+                                            .as_ref()
+                                            .and_then(|cache| {
+                                                cache
+                                                    .ranges
+                                                    .iter()
+                                                    .position(|range| {
+                                                        range.start <= cursor && cursor < range.end
+                                                    })
+                                                    .or_else(|| {
+                                                        cache.ranges.iter().position(|range| {
+                                                            range.is_empty()
+                                                                && range.start == cursor
+                                                        })
+                                                    })
+                                                    .or_else(|| {
+                                                        cache.ranges.last().and_then(|range| {
+                                                            (range.end == cursor).then_some(
+                                                                cache
+                                                                    .ranges
+                                                                    .len()
+                                                                    .saturating_sub(1),
+                                                            )
+                                                        })
+                                                    })
+                                            })
+                                        {
+                                            view.source_list_state.scroll_to_reveal_item(index);
+                                            view.interaction
+                                                .source_cursor_reveal_waiting_for_layout = true;
+                                        } else {
+                                            view.interaction.source_cursor_reveal_pending = false;
+                                        }
+
+                                        cx.notify();
+                                    }
+                                }
                             }
                         });
                         let moving = entity.downgrade();
@@ -365,6 +395,7 @@ impl super::Emerald {
                     },
                 )
                 .absolute()
+                .inset_0()
                 .size_full(),
             )
             .into_any_element()
