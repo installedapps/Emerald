@@ -63,7 +63,14 @@ struct MermaidGraph {
 ///
 /// Source mode retains the Mermaid text; preview mode uses this deterministic
 /// renderer so it does not need a browser or JavaScript runtime.
-pub fn mermaid_svg(source: &str) -> Option<String> {
+#[derive(Clone, Debug, PartialEq)]
+pub struct MermaidSvg {
+    pub content: String,
+    pub width: f32,
+    pub height: f32,
+}
+
+pub fn mermaid_svg(source: &str) -> Option<MermaidSvg> {
     let graph = parse_mermaid(source);
     if graph.nodes.is_empty() {
         return None;
@@ -156,7 +163,11 @@ pub fn mermaid_svg(source: &str) -> Option<String> {
     }
 
     svg.push_str("</svg>");
-    Some(svg)
+    Some(MermaidSvg {
+        content: svg,
+        width: CANVAS_WIDTH,
+        height,
+    })
 }
 
 fn parse_mermaid(source: &str) -> MermaidGraph {
@@ -435,12 +446,14 @@ classDef source fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
 class A,B source"##;
 
         let svg = mermaid_svg(source).unwrap();
-        assert!(svg.starts_with("<svg"));
-        assert!(svg.contains("Sources"));
-        assert!(svg.contains("Input"));
-        assert!(svg.contains("stroke-dasharray"));
-        assert!(svg.contains("Updated"));
-        assert!(svg.contains("#e0f2fe"));
-        assert!(!svg.contains("flowchart TD"));
+        assert!(svg.content.starts_with("<svg"));
+        assert!(svg.content.contains("Sources"));
+        assert!(svg.content.contains("Input"));
+        assert!(svg.content.contains("stroke-dasharray"));
+        assert!(svg.content.contains("Updated"));
+        assert!(svg.content.contains("#e0f2fe"));
+        assert!(!svg.content.contains("flowchart TD"));
+        assert_eq!(svg.width, CANVAS_WIDTH);
+        assert!(svg.height > NODE_HEIGHT);
     }
 }

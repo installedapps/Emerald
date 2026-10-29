@@ -31,12 +31,18 @@ pub(super) fn render(block: &RenderBlock, cx: &RenderContext<'_>) -> AnyElement 
 
     if kind == "mermaid" {
         if let Some(svg) = emerald::diagram::mermaid_svg(source) {
+            let aspect_ratio = svg.width / svg.height;
             let image = std::sync::Arc::new(gpui::Image::from_bytes(
                 gpui::ImageFormat::Svg,
-                svg.into_bytes(),
+                svg.content.into_bytes(),
             ));
             return diagram
-                .child(gpui::img(image).w_full().max_w(px(920.0)))
+                .child(
+                    gpui::img(image)
+                        .w_full()
+                        .max_w(px(svg.width))
+                        .aspect_ratio(aspect_ratio),
+                )
                 .into_any_element();
         }
     }
