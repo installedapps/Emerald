@@ -144,6 +144,35 @@ fn extracts_diagram_edges_for_the_preview() {
 }
 
 #[test]
+fn extracts_mermaid_labels_and_arrow_variants_for_the_preview() {
+    let source = r#"flowchart TD
+        A["Vehicle Telematics<br/>Sensors, GPS"]
+        B["Data Ingestion"]
+        C["Dashboard"]
+        A --> B
+        B -.-> C
+        C -->|Approved Actions| A"#;
+
+    assert_eq!(
+        diagram_edges(source),
+        vec![
+            DiagramEdge {
+                from: "Vehicle Telematics · Sensors, GPS".into(),
+                to: "Data Ingestion".into(),
+            },
+            DiagramEdge {
+                from: "Data Ingestion".into(),
+                to: "Dashboard".into(),
+            },
+            DiagramEdge {
+                from: "Dashboard".into(),
+                to: "Vehicle Telematics · Sensors, GPS".into(),
+            },
+        ]
+    );
+}
+
+#[test]
 fn interaction_frames_reuse_blocks_and_pending_edits_keep_the_last_preview() {
     let mut cache = RenderCache::default();
     let file = Path::new("note.adoc");

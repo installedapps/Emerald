@@ -145,13 +145,17 @@ impl ParsedDocument {
 
         let parsed = parser.parse();
         let result = match parsed {
-            Ok(result) => Self {
-                report: ParseReport {
-                    parsed: true,
-                    diagnostic_count: result.warnings.len(),
-                },
-                blocks: document_blocks(&result.document),
-            },
+            Ok(result) => {
+                let mut blocks = document_blocks(&result.document);
+                restore_diagram_sources(source, &mut blocks);
+                Self {
+                    report: ParseReport {
+                        parsed: true,
+                        diagnostic_count: result.warnings.len(),
+                    },
+                    blocks,
+                }
+            }
             Err(diagnostics) => Self {
                 report: ParseReport {
                     parsed: false,
@@ -369,15 +373,23 @@ fn extend_blocks(items: &[Block<'_>], output: &mut Vec<ParsedBlock>) {
             BlockContent::Simple(nodes) => match block.context {
                 BlockContext::Listing | BlockContext::Literal => {
                     let kind = block.meta.attrs.str_positional_at(0).unwrap_or("");
-                    if is_diagram_kind(kind) {
+                    let language = source_language(&block.meta.attrs);
+                    let diagram_kind = [Some(kind), language.as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .find(|kind| is_diagram_kind(kind));
+                    if let Some(diagram_kind) = diagram_kind {
                         output.push(ParsedBlock::Diagram {
-                            kind: kind.to_ascii_lowercase(),
-                            title: block.meta.attrs.str_positional_at(1).map(ToOwned::to_owned),
+                            kind: diagram_kind.to_ascii_lowercase(),
+                            title: (kind != "source")
+                                .then(|| block.meta.attrs.str_positional_at(1))
+                                .flatten()
+                                .map(ToOwned::to_owned),
                             source: inline_source(nodes).replace(" - ", " -> "),
                         });
                     } else {
                         output.push(ParsedBlock::Code {
-                            language: source_language(&block.meta.attrs),
+                            language,
                             code: inline_source(nodes),
                         });
                     }
@@ -471,6 +483,68 @@ fn is_diagram_kind(kind: &str) -> bool {
         kind,
         "blockdiag" | "plantuml" | "mermaid" | "graphviz" | "dot" | "ditaa" | "seqdiag" | "actdiag"
     )
+}
+
+/// Asciidork applies inline substitutions while constructing listing AST nodes.
+/// Diagram languages need their fenced source byte-for-byte (notably Mermaid's
+/// `-->` arrows), so replace the converted content with the original block body.
+fn restore_diagram_sources(source: &str, blocks: &mut [ParsedBlock]) {
+    let raw_sources = raw_diagram_sources(source);
+    let mut raw_sources = raw_sources.into_iter();
+    restore_diagram_sources_in(blocks, &mut raw_sources);
+}
+
+fn restore_diagram_sources_in(
+    blocks: &mut [ParsedBlock],
+    raw_sources: &mut impl Iterator<Item = String>,
+) {
+    for block in blocks {
+        match block {
+            ParsedBlock::Diagram { source, .. } => {
+                if let Some(raw) = raw_sources.next() {
+                    *source = raw;
+                }
+            }
+            ParsedBlock::Admonition { blocks, .. } => {
+                restore_diagram_sources_in(blocks, raw_sources)
+            }
+            _ => {}
+        }
+    }
+}
+
+fn raw_diagram_sources(source: &str) -> Vec<String> {
+    let lines = source.lines().collect::<Vec<_>>();
+    let mut diagrams = Vec::new();
+    let mut index = 0;
+    while index + 2 < lines.len() {
+        let attribute = lines[index].trim();
+        let Some(attributes) = attribute
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+        else {
+            index += 1;
+            continue;
+        };
+        let is_diagram = attributes.split(',').map(str::trim).any(is_diagram_kind);
+        let delimiter = lines[index + 1].trim();
+        if !is_diagram || !matches!(delimiter, "----" | "....") {
+            index += 1;
+            continue;
+        }
+        let body_start = index + 2;
+        let mut body_end = body_start;
+        while body_end < lines.len() && lines[body_end].trim() != delimiter {
+            body_end += 1;
+        }
+        if body_end < lines.len() {
+            diagrams.push(lines[body_start..body_end].join("\n"));
+            index = body_end + 1;
+        } else {
+            index += 1;
+        }
+    }
+    diagrams
 }
 
 fn inline_text(nodes: &InlineNodes<'_>) -> String {

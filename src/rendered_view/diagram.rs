@@ -10,74 +10,47 @@ pub(super) fn render(block: &RenderBlock, cx: &RenderContext<'_>) -> AnyElement 
         unreachable!("renderer and block variant diverged")
     };
     let index = cx.index;
-    let prepared = cx.prepared;
-    let text_color = cx.text_color;
-    let muted_text = cx.muted_text;
-    let accent = cx.accent;
-    let border = cx.border;
-    let panel = cx.panel;
-    {
-        let edges = prepared.edges(source);
-        div()
-            .id(("diagram-block", index))
-            .flex()
-            .flex_col()
-            .gap_2()
-            .w_full()
-            .min_w(px(0.0))
-            .p_3()
-            .bg(rgb(panel))
-            .border_1()
-            .border_color(rgb(accent))
-            .rounded_md()
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(rgb(accent))
-                    .child(kind.clone())
-                    .when_some(title.clone(), |header, title| header.child(title)),
-            )
-            .children(edges.iter().map(|edge| {
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .min_w(px(0.0))
-                    .text_color(rgb(text_color))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .border_1()
-                            .border_color(rgb(border))
-                            .rounded_md()
-                            .child(edge.from.clone()),
-                    )
-                    .child(div().text_color(rgb(accent)).child("->"))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .border_1()
-                            .border_color(rgb(border))
-                            .rounded_md()
-                            .child(edge.to.clone()),
-                    )
-            }))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .min_w(px(0.0))
-                    .whitespace_normal()
-                    .text_color(rgb(muted_text))
-                    .line_height(px(22.0))
-                    .children(source.lines().map(|line| div().child(line.to_string()))),
-            )
-            .into_any_element()
+    let mut diagram = div()
+        .id(("diagram-block", index))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_2()
+        .w_full()
+        .min_w(px(0.0));
+
+    if let Some(title) = title {
+        diagram = diagram.child(
+            div()
+                .w_full()
+                .text_sm()
+                .text_color(rgb(cx.heading))
+                .child(title.clone()),
+        );
     }
+
+    if kind == "mermaid" {
+        if let Some(svg) = emerald::diagram::mermaid_svg(source) {
+            let image = std::sync::Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Svg,
+                svg.into_bytes(),
+            ));
+            return diagram
+                .child(gpui::img(image).w_full().max_w(px(920.0)))
+                .into_any_element();
+        }
+    }
+
+    diagram
+        .child(
+            div()
+                .w_full()
+                .p_3()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(cx.border))
+                .text_color(rgb(cx.muted_text))
+                .child("Unable to render this diagram"),
+        )
+        .into_any_element()
 }

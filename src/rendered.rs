@@ -443,7 +443,7 @@ pub fn render_blocks(source: &str) -> Vec<RenderBlock> {
 
 fn render_parsed_blocks(parsed_blocks: &[ParsedBlock], include_toc: bool) -> Vec<RenderBlock> {
     let mut blocks = parsed_blocks
-        .into_iter()
+        .iter()
         .map(|b| match b {
             ParsedBlock::Heading { level, text } => RenderBlock::Heading {
                 level: *level,
@@ -507,16 +507,77 @@ pub struct DiagramEdge {
     pub to: String,
 }
 pub fn diagram_edges(source: &str) -> Vec<DiagramEdge> {
+    let labels = source
+        .lines()
+        .filter_map(mermaid_node)
+        .collect::<std::collections::HashMap<_, _>>();
+
     source
         .lines()
         .filter_map(|line| {
-            let (from, to) = line.split_once("->").or_else(|| line.split_once(" - "))?;
+            let (from, to) = split_diagram_edge(line)?;
+            let (from_id, from_inline_label) = diagram_endpoint(from)?;
+            let to = strip_edge_label(to);
+            let (to_id, to_inline_label) = diagram_endpoint(to)?;
             Some(DiagramEdge {
-                from: from.trim().to_string(),
-                to: to.trim().to_string(),
+                from: from_inline_label
+                    .or_else(|| labels.get(from_id).cloned())
+                    .unwrap_or_else(|| from_id.to_string()),
+                to: to_inline_label
+                    .or_else(|| labels.get(to_id).cloned())
+                    .unwrap_or_else(|| to_id.to_string()),
             })
         })
         .collect()
+}
+
+fn split_diagram_edge(line: &str) -> Option<(&str, &str)> {
+    ["-.->", "-->", "==>", "->", " - "]
+        .into_iter()
+        .filter_map(|arrow| line.split_once(arrow).map(|parts| (arrow, parts)))
+        .min_by_key(|(_, (left, _))| left.len())
+        .map(|(_, parts)| parts)
+}
+
+fn mermaid_node(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    if line.starts_with("subgraph ") || split_diagram_edge(line).is_some() {
+        return None;
+    }
+    let (id, label) = diagram_endpoint(line)?;
+    label.map(|label| (id.to_string(), label))
+}
+
+fn diagram_endpoint(value: &str) -> Option<(&str, Option<String>)> {
+    let value = value.trim().trim_end_matches(';');
+    let id_end = value
+        .find(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .unwrap_or(value.len());
+    let id = &value[..id_end];
+    if id.is_empty() {
+        return None;
+    }
+    let label = value
+        .find('"')
+        .zip(value.rfind('"'))
+        .filter(|(start, end)| start < end)
+        .map(|(start, end)| clean_mermaid_label(&value[start + 1..end]));
+    Some((id, label))
+}
+
+fn strip_edge_label(value: &str) -> &str {
+    let value = value.trim();
+    value
+        .strip_prefix('|')
+        .and_then(|value| value.split_once('|').map(|(_, endpoint)| endpoint.trim()))
+        .unwrap_or(value)
+}
+
+fn clean_mermaid_label(label: &str) -> String {
+    label
+        .replace("<br/>", " · ")
+        .replace("<br />", " · ")
+        .replace("<br>", " · ")
 }
 
 #[cfg(test)]

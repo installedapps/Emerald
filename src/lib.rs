@@ -1,4 +1,5 @@
 pub mod cursor;
+pub mod diagram;
 mod document;
 pub mod graph;
 pub mod index;

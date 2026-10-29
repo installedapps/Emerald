@@ -24,6 +24,29 @@ fn parses_basic_asciidoc_with_asciidork() {
 }
 
 #[test]
+fn parses_mermaid_source_blocks_as_diagrams() {
+    for source in [
+        "[mermaid]\n----\nflowchart TD\nA --> B\n----",
+        "[mermaid]\n....\nflowchart TD\nA --> B\n....",
+        "[source,mermaid]\n----\nflowchart TD\nA --> B\n----",
+        "[source,mermaid]\n....\nflowchart TD\nA --> B\n....",
+    ] {
+        let document = ParsedDocument::from_source(source);
+
+        assert!(document.report.parsed, "{source}");
+        assert_eq!(
+            document.blocks,
+            vec![ParsedBlock::Diagram {
+                kind: "mermaid".into(),
+                title: None,
+                source: "flowchart TD\nA --> B".into(),
+            }],
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn parsed_document_is_the_single_source_for_diagnostics_and_content() {
     let document = ParsedDocument::from_source("= Title\n\nA *formatted* paragraph.");
 
